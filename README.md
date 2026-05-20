@@ -54,7 +54,7 @@ pi -e /absolute/path/to/pi-thinking-translator
    ~/.pi/agent/thinking-translator.json
    ```
 
-4. Enable translation and point the extension at a DeepSeek model:
+4. Enable translation and point the extension at a Pi model:
 
    ```json
    {
