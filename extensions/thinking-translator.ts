@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { complete } from "@earendil-works/pi-ai";
@@ -13,29 +13,47 @@ type TranslatorConfig = {
 	targetLanguage?: string;
 	contentTypes?: TranslatableBlockType[];
 	minLatinChars?: number;
-	translatorModel?: ModelRef;
+	translatorModel?: ModelRef | null;
 	maxPersistedTranslations?: number;
 };
+type ResolvedTranslatorConfig = Omit<Required<TranslatorConfig>, "translatorModel"> & { translatorModel?: ModelRef };
 type NotifyLevel = "info" | "warning" | "error";
-type NotifierContext = { ui?: { notify?: (message: string, level?: NotifyLevel) => void } };
+type NotifierContext = { ui?: { notify?: (message: string, level?: NotifyLevel) => void }; cwd?: string; modelRegistry?: any };
+type ConfigPathInfo = { scope: "global" | "project"; path: string; exists: boolean };
+type ConfigLoadError = { scope: "global" | "project"; path: string; error: unknown };
+type ConfigState = { config: ResolvedTranslatorConfig; paths: ConfigPathInfo[]; errors: ConfigLoadError[] };
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "thinking-translator.json");
+const CONFIG_FILE_NAME = "thinking-translator.json";
+const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", CONFIG_FILE_NAME);
 const TRANSLATED_BY_EXTENSION = "pi-thinking-translator";
 const TRANSLATION_METADATA_KEY = "piThinkingTranslator";
-const DEFAULT_CONFIG: Required<TranslatorConfig> = {
+const DEFAULT_CONFIG: ResolvedTranslatorConfig = {
 	enabled: true,
 	targetLanguage: "Simplified Chinese",
 	contentTypes: ["thinking"],
 	minLatinChars: 24,
-	translatorModel: { provider: "ollama", id: "qwen2.5:3b-instruct" },
 	maxPersistedTranslations: 3,
 };
-let configErrorNotified = false;
+const configErrorNotified = new Set<string>();
+let missingModelWarningKey: string | undefined;
 
 /**
  * 注册 thinking 翻译扩展；在 assistant 消息结束后追加译文 thinking block，让展示颜色保持与原 thinking 一致。
  */
 export default function thinkingTranslator(pi: ExtensionAPI) {
+	pi.registerCommand("thinking-translator", {
+		description: "Show or initialize thinking-translator configuration",
+		getArgumentCompletions: (prefix) => {
+			// 命令参数保持极简：默认 status，init 可显式选择全局或项目配置文件。
+			const options = ["status", "init", "init --global", "init --project"];
+			return options.filter((option) => option.startsWith(prefix)).map((value) => ({ value, label: value }));
+		},
+		handler: async (args, ctx) => {
+			// 配置命令只做显式展示或初始化，避免安装/启动时自动写入用户文件。
+			await handleConfigCommand(args, ctx);
+		},
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		// 启动时清理超出最近窗口的历史译文，降低卸载插件后历史 session 污染上下文的风险。
 		safePrunePersistedTranslations(ctx);
@@ -67,8 +85,11 @@ export default function thinkingTranslator(pi: ExtensionAPI) {
 		if (message.role !== "assistant" || !Array.isArray(message.content)) return;
 		if (hasTranslatedThinking(message)) return;
 
+		const translatorModel = resolveTranslatorModel(ctx, config);
+		if (!translatorModel) return;
+
 		try {
-			const translatedContent = await mergeTranslationsIntoThinkingBlocks(message.content, ctx, config);
+			const translatedContent = await mergeTranslationsIntoThinkingBlocks(message.content, ctx, config, translatorModel);
 			if (translatedContent === message.content) return;
 
 			return {
@@ -85,34 +106,164 @@ export default function thinkingTranslator(pi: ExtensionAPI) {
 	});
 }
 
-function loadConfig(ctx?: NotifierContext): Required<TranslatorConfig> {
-	// 配置文件缺失时使用内置默认值；配置文件损坏时禁用翻译，避免用户以为关闭后仍触发默认模型。
-	if (!existsSync(CONFIG_PATH)) {
-		configErrorNotified = false;
-		return DEFAULT_CONFIG;
+async function handleConfigCommand(args: string, ctx: any): Promise<void> {
+	// /thinking-translator 默认展示状态；init 只有用户显式调用时才写配置文件。
+	const normalized = args.trim();
+	if (normalized.startsWith("init")) {
+		const scope = normalized.includes("--project") || /\bproject\b/.test(normalized) ? "project" : "global";
+		initConfigFile(ctx, scope);
+		return;
 	}
-	try {
-		const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as TranslatorConfig;
-		configErrorNotified = false;
-		return {
-			...DEFAULT_CONFIG,
-			...raw,
-			contentTypes: normalizeContentTypes(raw.contentTypes),
-			translatorModel: { ...DEFAULT_CONFIG.translatorModel, ...raw.translatorModel },
-			maxPersistedTranslations: normalizeMaxPersistedTranslations(raw.maxPersistedTranslations),
-		};
-	} catch (error) {
-		notifyConfigLoadError(ctx, error);
-		return { ...DEFAULT_CONFIG, enabled: false };
-	}
+	showConfigStatus(ctx);
 }
 
-function notifyConfigLoadError(ctx: NotifierContext | undefined, error: unknown): void {
-	// 配置错误只提示一次，避免每个消息周期重复刷屏；禁用翻译比静默回退默认模型更安全。
-	if (configErrorNotified) return;
-	configErrorNotified = true;
+function getProjectConfigPath(cwd: string | undefined): string | undefined {
+	// 项目配置跟随 Pi 的 .pi/settings.json 习惯，允许特定项目覆盖全局翻译策略。
+	return cwd ? join(cwd, ".pi", CONFIG_FILE_NAME) : undefined;
+}
+
+function getConfigPaths(ctx?: NotifierContext): ConfigPathInfo[] {
+	// 配置加载顺序与 Pi settings 一致：全局先读，项目后读并覆盖全局。
+	const projectPath = getProjectConfigPath(ctx?.cwd);
+	return [
+		{ scope: "global", path: GLOBAL_CONFIG_PATH, exists: existsSync(GLOBAL_CONFIG_PATH) },
+		...(projectPath ? [{ scope: "project" as const, path: projectPath, exists: existsSync(projectPath) }] : []),
+	];
+}
+
+function loadConfig(ctx?: NotifierContext): ResolvedTranslatorConfig {
+	// 事件处理只需要最终配置；详细路径和错误留给 status 命令展示。
+	return loadConfigState(ctx).config;
+}
+
+function loadConfigState(ctx?: NotifierContext): ConfigState {
+	// 内置默认值不落盘；用户配置只作为覆盖层，项目配置优先于全局配置。
+	const paths = getConfigPaths(ctx);
+	const errors: ConfigLoadError[] = [];
+	let config = { ...DEFAULT_CONFIG };
+
+	for (const info of paths) {
+		if (!info.exists) {
+			configErrorNotified.delete(info.path);
+			continue;
+		}
+		try {
+			const raw = JSON.parse(readFileSync(info.path, "utf8")) as TranslatorConfig;
+			configErrorNotified.delete(info.path);
+			config = mergeConfig(config, raw);
+		} catch (error) {
+			errors.push({ scope: info.scope, path: info.path, error });
+			notifyConfigLoadError(ctx, info.path, error);
+		}
+	}
+
+	if (errors.length > 0) return { config: { ...config, enabled: false }, paths, errors };
+	return { config, paths, errors };
+}
+
+function mergeConfig(base: ResolvedTranslatorConfig, raw: TranslatorConfig): ResolvedTranslatorConfig {
+	// 每层配置都是 partial override；translatorModel 允许项目层只覆盖 provider 或 id。
+	return {
+		...base,
+		...raw,
+		contentTypes: raw.contentTypes === undefined ? base.contentTypes : normalizeContentTypes(raw.contentTypes),
+		translatorModel: normalizeTranslatorModel(raw.translatorModel, base.translatorModel),
+		maxPersistedTranslations:
+			raw.maxPersistedTranslations === undefined
+				? base.maxPersistedTranslations
+				: normalizeMaxPersistedTranslations(raw.maxPersistedTranslations),
+	};
+}
+
+function normalizeTranslatorModel(value: unknown, fallback?: ModelRef): ModelRef | undefined {
+	// 不提供默认模型；只有用户显式配置了 provider 和 id 后才启用翻译请求。
+	if (value === undefined) return fallback;
+	if (!value || typeof value !== "object") return undefined;
+	const raw = value as Record<string, unknown>;
+	const provider = typeof raw.provider === "string" ? raw.provider : fallback?.provider;
+	const id = typeof raw.id === "string" ? raw.id : fallback?.id;
+	return provider && id ? { provider, id } : undefined;
+}
+
+function notifyConfigLoadError(ctx: NotifierContext | undefined, path: string, error: unknown): void {
+	// 配置错误只提示一次，避免每个消息周期重复刷屏；禁用翻译比静默回退更安全。
+	if (configErrorNotified.has(path)) return;
+	configErrorNotified.add(path);
 	const message = error instanceof Error ? error.message : String(error);
-	ctx?.ui?.notify?.(`thinking-translator config invalid, translation disabled: ${message}`, "warning");
+	ctx?.ui?.notify?.(`thinking-translator config invalid, translation disabled: ${path}: ${message}`, "warning");
+}
+
+function resolveTranslatorModel(ctx: any, config: ResolvedTranslatorConfig): any | undefined {
+	// 启用但未配置模型时只提示并跳过翻译，不把缺省模型强加给用户。
+	const modelRef = config.translatorModel;
+	if (!modelRef) {
+		notifyMissingModel(ctx, "not-configured", "thinking-translator enabled but translatorModel is not configured; translation skipped");
+		return undefined;
+	}
+
+	const model = ctx.modelRegistry.find(modelRef.provider, modelRef.id);
+	if (!model) {
+		notifyMissingModel(ctx, `${modelRef.provider}/${modelRef.id}`, `thinking-translator model not found: ${modelRef.provider}/${modelRef.id}; translation skipped`);
+		return undefined;
+	}
+	missingModelWarningKey = undefined;
+	return model;
+}
+
+function notifyMissingModel(ctx: NotifierContext, key: string, message: string): void {
+	// 同一个缺模型状态只提示一次，用户修正配置后 key 变化会再次提示新问题。
+	if (missingModelWarningKey === key) return;
+	missingModelWarningKey = key;
+	ctx.ui?.notify?.(message, "warning");
+}
+
+function showConfigStatus(ctx: any): void {
+	// status 汇总有效配置、配置来源和模型可用性，帮助用户决定是否需要 init 或修改 JSON。
+	const state = loadConfigState(ctx);
+	const modelRef = state.config.translatorModel;
+	const modelStatus = modelRef ? (ctx.modelRegistry.find(modelRef.provider, modelRef.id) ? "available" : "not found") : "not configured";
+	const lines = [
+		"thinking-translator status",
+		`enabled: ${state.config.enabled}`,
+		`targetLanguage: ${state.config.targetLanguage}`,
+		`contentTypes: ${state.config.contentTypes.join(", ")}`,
+		`minLatinChars: ${state.config.minLatinChars}`,
+		`maxPersistedTranslations: ${state.config.maxPersistedTranslations}`,
+		`translatorModel: ${modelRef ? `${modelRef.provider}/${modelRef.id}` : "not configured"}`,
+		`model: ${modelStatus}`,
+		...state.paths.map((info) => `${info.scope} config: ${info.path} (${info.exists ? "found" : "not found"})`),
+		...state.errors.map((item) => `${item.scope} config error: ${item.error instanceof Error ? item.error.message : String(item.error)}`),
+	];
+	ctx.ui.notify(lines.join("\n"), state.errors.length > 0 ? "warning" : "info");
+}
+
+function initConfigFile(ctx: any, scope: "global" | "project"): void {
+	// init 生成禁用状态的最小模板，不写默认模型；用户填入 translatorModel 并启用后才会请求翻译模型。
+	const path = scope === "project" ? getProjectConfigPath(ctx.cwd) : GLOBAL_CONFIG_PATH;
+	if (!path) {
+		ctx.ui.notify("thinking-translator project config path is unavailable", "warning");
+		return;
+	}
+	if (existsSync(path)) {
+		ctx.ui.notify(`thinking-translator config already exists: ${path}`, "info");
+		return;
+	}
+
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(
+		path,
+		JSON.stringify(
+			{
+				enabled: false,
+				targetLanguage: DEFAULT_CONFIG.targetLanguage,
+				contentTypes: DEFAULT_CONFIG.contentTypes,
+			},
+			null,
+			2,
+		) + "\n",
+		"utf8",
+	);
+	ctx.ui.notify(`created ${scope} config: ${path}\nAdd translatorModel and set enabled to true when ready.`, "info");
 }
 
 function normalizeContentTypes(value: unknown): TranslatableBlockType[] {
@@ -209,7 +360,7 @@ function safePrunePersistedTranslations(ctx: any): void {
 	}
 }
 
-function prunePersistedTranslations(ctx: any, config: Required<TranslatorConfig>): void {
+function prunePersistedTranslations(ctx: any, config: ResolvedTranslatorConfig): void {
 	// SessionManager 没有公开“更新旧消息”的 API，这里只重写当前 session JSONL，并同步修改 getEntries() 返回的内存对象。
 	const sessionFile = ctx.sessionManager.getSessionFile?.();
 	const entries = ctx.sessionManager.getEntries?.();
@@ -249,9 +400,10 @@ function writeSessionEntriesAtomically(sessionFile: string, entries: unknown[]):
 async function mergeTranslationsIntoThinkingBlocks(
 	content: Array<Record<string, unknown>>,
 	ctx: any,
-	config: Required<TranslatorConfig>,
+	config: ResolvedTranslatorConfig,
+	translatorModel: any,
 ): Promise<Array<Record<string, unknown>>> {
-	// 把译文合并进同一个 thinking block，避免 Pi 最终消息排序变化时把译文和原文隔到正文两侧。
+	// 把译文合并进同一个 source block，避免 Pi 最终消息排序变化时把译文和原文隔到正文两侧。
 	const nextContent: Array<Record<string, unknown>> = [];
 	let changed = false;
 
@@ -262,7 +414,7 @@ async function mergeTranslationsIntoThinkingBlocks(
 			continue;
 		}
 
-		const translated = await translateThinking(source.text, ctx, config);
+		const translated = await translateThinking(source.text, ctx, config, translatorModel);
 		const cleaned = cleanTranslation(translated);
 		if (!cleaned) {
 			nextContent.push(block);
@@ -291,7 +443,7 @@ async function mergeTranslationsIntoThinkingBlocks(
 	return changed ? nextContent : content;
 }
 
-function getTranslatableBlockSource(block: Record<string, unknown>, config: Required<TranslatorConfig>): TranslatableBlockSource | undefined {
+function getTranslatableBlockSource(block: Record<string, unknown>, config: ResolvedTranslatorConfig): TranslatableBlockSource | undefined {
 	// 按配置白名单提取可翻译文本，并记录写回字段，方便 context 阶段精确还原原文。
 	if (isTranslatedThinkingBlock(block)) return undefined;
 
@@ -304,19 +456,16 @@ function getTranslatableBlockSource(block: Record<string, unknown>, config: Requ
 	return undefined;
 }
 
-function shouldTranslate(text: string, config: Required<TranslatorConfig>): boolean {
+function shouldTranslate(text: string, config: ResolvedTranslatorConfig): boolean {
 	// 只翻译明显包含英文自然语言的内容，避免处理纯中文或纯代码片段。
 	const latin = (text.match(/[A-Za-z]/g) ?? []).length;
 	const cjk = (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
 	return latin >= config.minLatinChars && latin > cjk;
 }
 
-async function translateThinking(text: string, ctx: any, config: Required<TranslatorConfig>): Promise<string> {
-	// 使用 Pi 已配置模型翻译，避免 package 绑定具体第三方翻译 API。
-	const model = ctx.modelRegistry.find(config.translatorModel.provider, config.translatorModel.id);
-	if (!model) throw new Error("translator model not found: " + config.translatorModel.provider + "/" + config.translatorModel.id);
-
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+async function translateThinking(text: string, ctx: any, config: ResolvedTranslatorConfig, translatorModel: any): Promise<string> {
+	// 使用用户显式配置的 Pi 模型翻译，避免 package 绑定具体第三方翻译 API 或默认模型。
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(translatorModel);
 	if (!auth.ok) throw new Error(auth.error);
 
 	const prompt = [
@@ -336,7 +485,7 @@ async function translateThinking(text: string, ctx: any, config: Required<Transl
 	].join("\n");
 
 	const response = await complete(
-		model,
+		translatorModel,
 		{ messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] },
 		{ apiKey: auth.apiKey, headers: auth.headers, maxTokens: Math.min(8192, Math.max(1024, Math.ceil(text.length * 1.3))), signal: ctx.signal },
 	);
@@ -364,10 +513,14 @@ function cleanTranslation(text: string): string {
 
 export const __testing = {
 	// 测试只暴露纯逻辑入口，避免测试直接依赖 Pi runtime hook 调度。
+	CONFIG_FILE_NAME,
 	DEFAULT_CONFIG,
 	cleanTranslation,
+	getProjectConfigPath,
 	getTranslatableBlockSource,
+	mergeConfig,
 	normalizeContentTypes,
+	normalizeTranslatorModel,
 	restoreOriginalThinkingBlock,
 	shouldTranslate,
 	stripTranslatedThinkingFromMessages,

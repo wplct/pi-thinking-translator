@@ -44,18 +44,7 @@ pi install npm:pi-thinking-translator
 
 ## Configuration
 
-Create `~/.pi/agent/thinking-translator.json` only if you want to override defaults. In most installs you only need to point the extension at an available Pi model:
-
-```json
-{
-  "translatorModel": {
-    "provider": "ollama",
-    "id": "qwen2.5:3b-instruct"
-  }
-}
-```
-
-All other settings are filled from built-in defaults:
+The extension does not create a config file automatically and does not choose a default translator model. Built-in defaults are used unless you explicitly override them:
 
 ```json
 {
@@ -63,15 +52,43 @@ All other settings are filled from built-in defaults:
   "targetLanguage": "Simplified Chinese",
   "contentTypes": ["thinking"],
   "minLatinChars": 24,
-  "maxPersistedTranslations": 3,
+  "maxPersistedTranslations": 3
+}
+```
+
+Configuration files are optional partial overrides. They follow Pi's global/project convention:
+
+1. Built-in defaults
+2. Global config: `~/.pi/agent/thinking-translator.json`
+3. Project config: `.pi/thinking-translator.json`
+
+Project config overrides global config. Use the status command to inspect the effective config:
+
+```bash
+/thinking-translator
+/thinking-translator status
+```
+
+Create a disabled template explicitly when you want one:
+
+```bash
+/thinking-translator init --global
+/thinking-translator init --project
+```
+
+To enable translation, add a model that already exists in Pi's model registry, for example through `~/.pi/agent/models.json`, then set `enabled` to `true`:
+
+```json
+{
+  "enabled": true,
   "translatorModel": {
     "provider": "ollama",
-    "id": "qwen2.5:3b-instruct"
+    "id": "your-model-id"
   }
 }
 ```
 
-The translator model must already be available in Pi's model registry, for example through `~/.pi/agent/models.json`.
+If translation is enabled but `translatorModel` is missing or cannot be found, the extension shows a warning and skips translation without affecting the main assistant message.
 
 `contentTypes` controls which content blocks are translated. Pi's documented message content blocks include `text`, `image`, `thinking`, and `toolCall`; this extension supports textual blocks only: `thinking`, `reasoning`, `reasoning_summary`, and `text`. The default is `thinking` only, because ordinary `text` is the final assistant answer.
 

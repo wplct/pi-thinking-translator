@@ -7,11 +7,33 @@ const baseConfig = {
 	contentTypes: ["thinking"] as Array<"thinking" | "reasoning" | "reasoning_summary" | "text">,
 };
 
+test("built-in defaults do not choose a translator model", () => {
+	// 默认不绑定具体模型，用户显式配置 translatorModel 后才会发起翻译请求。
+	assert.equal(__testing.DEFAULT_CONFIG.translatorModel, undefined);
+	assert.equal(__testing.DEFAULT_CONFIG.enabled, true);
+});
+
 test("normalizeContentTypes keeps thinking-only default safe", () => {
 	// 默认只翻译 thinking，非法或空配置都回退到安全默认值。
 	assert.deepEqual(__testing.normalizeContentTypes(undefined), ["thinking"]);
 	assert.deepEqual(__testing.normalizeContentTypes([]), ["thinking"]);
 	assert.deepEqual(__testing.normalizeContentTypes(["text", "image", "text"]), ["text"]);
+});
+
+test("mergeConfig supports partial global and project overrides", () => {
+	// 配置层是 partial override：项目层可只改模型 id，其他值继承全局或内置默认。
+	const globalConfig = __testing.mergeConfig(__testing.DEFAULT_CONFIG, {
+		translatorModel: { provider: "ollama", id: "qwen2.5:7b" },
+		contentTypes: ["thinking", "text"],
+	});
+	const projectConfig = __testing.mergeConfig(globalConfig, {
+		translatorModel: { provider: "ollama", id: "qwen3:8b" },
+		maxPersistedTranslations: 0,
+	});
+
+	assert.deepEqual(projectConfig.translatorModel, { provider: "ollama", id: "qwen3:8b" });
+	assert.deepEqual(projectConfig.contentTypes, ["thinking", "text"]);
+	assert.equal(projectConfig.maxPersistedTranslations, 0);
 });
 
 test("stripTranslatedThinkingFromMessages restores merged thinking blocks", () => {
