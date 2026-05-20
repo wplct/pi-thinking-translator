@@ -28,65 +28,10 @@ test("mergeConfig supports partial global and project overrides", () => {
 	});
 	const projectConfig = __testing.mergeConfig(globalConfig, {
 		translatorModel: { provider: "ollama", id: "qwen3:8b" },
-		maxPersistedTranslations: 0,
 	});
 
 	assert.deepEqual(projectConfig.translatorModel, { provider: "ollama", id: "qwen3:8b" });
 	assert.deepEqual(projectConfig.contentTypes, ["thinking", "text"]);
-	assert.equal(projectConfig.maxPersistedTranslations, 0);
-});
-
-test("stripTranslatedThinkingFromMessages restores merged thinking blocks", () => {
-	// 进入上下文前必须还原原始 thinking，避免展示译文污染后续模型请求。
-	const messages = [
-		{
-			role: "assistant",
-			content: [
-				{
-					type: "thinking",
-					thinking: "Original thinking\n\n译文",
-					translatedBy: "pi-thinking-translator",
-					metadata: {
-						piThinkingTranslator: {
-							displayOnly: true,
-							originalField: "thinking",
-							originalText: "Original thinking",
-						},
-					},
-				},
-			],
-		},
-	];
-
-	const stripped = __testing.stripTranslatedThinkingFromMessages(messages);
-	assert.notEqual(stripped, messages);
-	assert.deepEqual(stripped[0].content, [{ type: "thinking", thinking: "Original thinking" }]);
-});
-
-test("stripTranslatedThinkingFromMessages restores opt-in text blocks", () => {
-	// text 是最终回答正文，启用翻译后也必须能在 context/compaction 前恢复原文。
-	const messages = [
-		{
-			role: "assistant",
-			content: [
-				{
-					type: "text",
-					text: "Final answer\n\n最终回答",
-					metadata: {
-						piThinkingTranslator: {
-							displayOnly: true,
-							originalBlockType: "text",
-							originalField: "text",
-							originalText: "Final answer",
-						},
-					},
-				},
-			],
-		},
-	];
-
-	const stripped = __testing.stripTranslatedThinkingFromMessages(messages);
-	assert.deepEqual(stripped[0].content, [{ type: "text", text: "Final answer" }]);
 });
 
 test("getTranslatableBlockSource respects configured content types", () => {

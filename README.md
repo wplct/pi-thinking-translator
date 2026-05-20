@@ -8,9 +8,8 @@ This package is a Pi extension for users who prefer to inspect visible assistant
 
 - Translates configured visible assistant content blocks after an assistant message finishes.
 - Uses a model already configured in Pi's model registry.
-- Appends the translation under the original block with minimal display noise.
-- Restores the original block before future model context and compaction.
-- Keeps only the latest few persisted translations by default.
+- Shows translations as transient Pi UI notifications.
+- Does not modify assistant messages, future model context, compaction input, or provider cache keys.
 - Supports optional translation of normal assistant `text` answers when explicitly enabled.
 - Supports global config with project-level overrides.
 
@@ -79,11 +78,13 @@ The `provider` and `id` must match a model visible to Pi, for example a model co
 ```text
 /thinking-translator
 /thinking-translator status
+/thinking-translator init
 /thinking-translator init --global
 /thinking-translator init --project
 ```
 
 - `/thinking-translator` and `/thinking-translator status` show the effective config, config file paths, and translator model availability.
+- `/thinking-translator init` creates the global config, same as `/thinking-translator init --global`.
 - `/thinking-translator init --global` creates `~/.pi/agent/thinking-translator.json` if it does not already exist.
 - `/thinking-translator init --project` creates `.pi/thinking-translator.json` in the current project if it does not already exist.
 
@@ -98,8 +99,7 @@ The extension does not create a config file automatically and does not choose a 
   "enabled": true,
   "targetLanguage": "Simplified Chinese",
   "contentTypes": ["thinking"],
-  "minLatinChars": 24,
-  "maxPersistedTranslations": 3
+  "minLatinChars": 24
 }
 ```
 
@@ -133,7 +133,7 @@ Create `.pi/thinking-translator.json` in that project:
 }
 ```
 
-When `text` is enabled, the translated answer is appended under the original answer in the UI. The extension still restores the original block before future model context and compaction.
+When `text` is enabled, the translated answer is shown as a temporary UI notification. The extension still leaves the original assistant answer unchanged.
 
 ### Options
 
@@ -144,7 +144,6 @@ When `text` is enabled, the translated answer is appended under the original ans
 | `contentTypes` | string[] | `["thinking"]` | Visible assistant block types to translate. Supported values: `thinking`, `reasoning`, `reasoning_summary`, `text`. |
 | `minLatinChars` | number | `24` | Minimum number of Latin letters required before a block is considered translatable. |
 | `translatorModel` | object | unset | Pi model reference: `{ "provider": "...", "id": "..." }`. |
-| `maxPersistedTranslations` | number | `3` | Number of recent assistant messages that keep display translations in the session file. Use `0` to prune persisted translations after each turn. |
 
 If translation is enabled but `translatorModel` is missing or cannot be found, the extension shows a warning and skips translation without affecting the main assistant message.
 
@@ -152,12 +151,10 @@ If translation is enabled but `translatorModel` is missing or cannot be found, t
 
 1. After an assistant message finishes, the extension looks for configured translatable blocks.
 2. It sends the original visible block text to the configured Pi model.
-3. It appends the cleaned translation under the original text in the same source block.
-4. Before future LLM calls, the `context` hook restores the original block.
-5. Before compaction, the `session_before_compact` hook also restores the original block.
-6. On startup and after agent turns, older persisted display translations are pruned according to `maxPersistedTranslations`.
+3. It shows the cleaned translation via a transient Pi UI notification.
+4. It does not return a modified assistant message, so translations are not written to the session file.
 
-This design keeps translations visible to the user while avoiding display translations becoming future model input.
+This design lets you inspect translations briefly to catch model drift while avoiding display translations becoming future model input or provider cache material.
 
 ## Security Notes
 
@@ -165,7 +162,7 @@ Pi extensions run with full system permissions. Review extension source before i
 
 Translation backends may receive the visible blocks enabled by `contentTypes`, including final assistant answers if `text` is enabled. Use a local model if that content should not leave your machine.
 
-The current implementation stores translations as display metadata on the source block, then restores the original block in `context` and `session_before_compact` events so display translations do not enter future model context or compaction summaries. To reduce risk if the extension is later removed, the session file is pruned on startup and after each agent turn so only the latest `maxPersistedTranslations` translated assistant messages remain.
+The current implementation displays translations through transient UI notifications instead of storing them on assistant messages, so display translations do not enter future model context or compaction summaries.
 
 ## Development
 

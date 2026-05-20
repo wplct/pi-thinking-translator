@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -14,7 +14,6 @@ type TranslatorConfig = {
 	contentTypes?: TranslatableBlockType[];
 	minLatinChars?: number;
 	translatorModel?: ModelRef | null;
-	maxPersistedTranslations?: number;
 };
 type ResolvedTranslatorConfig = Omit<Required<TranslatorConfig>, "translatorModel"> & { translatorModel?: ModelRef };
 type NotifyLevel = "info" | "warning" | "error";
@@ -25,20 +24,17 @@ type ConfigState = { config: ResolvedTranslatorConfig; paths: ConfigPathInfo[]; 
 
 const CONFIG_FILE_NAME = "thinking-translator.json";
 const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", CONFIG_FILE_NAME);
-const TRANSLATED_BY_EXTENSION = "pi-thinking-translator";
-const TRANSLATION_METADATA_KEY = "piThinkingTranslator";
 const DEFAULT_CONFIG: ResolvedTranslatorConfig = {
 	enabled: true,
 	targetLanguage: "Simplified Chinese",
 	contentTypes: ["thinking"],
 	minLatinChars: 24,
-	maxPersistedTranslations: 3,
 };
 const configErrorNotified = new Set<string>();
 let missingModelWarningKey: string | undefined;
 
 /**
- * 注册 thinking 翻译扩展；在 assistant 消息结束后追加译文 thinking block，让展示颜色保持与原 thinking 一致。
+ * 注册 thinking 翻译扩展；在 assistant 消息结束后用临时 UI 提示展示译文，避免改写会话消息和模型缓存。
  */
 export default function thinkingTranslator(pi: ExtensionAPI) {
 	pi.registerCommand("thinking-translator", {
@@ -55,49 +51,23 @@ export default function thinkingTranslator(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		// 启动时清理超出最近窗口的历史译文，降低卸载插件后历史 session 污染上下文的风险。
-		safePrunePersistedTranslations(ctx);
+		// 启动时只提示扩展已加载，不写入会话消息或执行历史清理。
 		ctx.ui.notify("thinking-translator loaded", "info");
 	});
 
-	pi.on("agent_end", async (_event, ctx) => {
-		// 当前 assistant 消息会在 message_end 后持久化；agent_end 再收敛一次，只保留最近 N 条译文。
-		safePrunePersistedTranslations(ctx);
-	});
-
-	pi.on("context", (event) => {
-		// 发送给模型前剥离译文 block，避免展示层翻译进入后续 LLM 上下文。
-		return { messages: stripTranslatedThinkingFromMessages(event.messages as any[]) };
-	});
-
-	pi.on("session_before_compact", (event) => {
-		// compaction 会单独序列化 assistant thinking；摘要前也必须剥离译文，避免中文翻译被写入压缩记忆。
-		event.preparation.messagesToSummarize = stripTranslatedThinkingFromMessages(event.preparation.messagesToSummarize as any[]) as any;
-		event.preparation.turnPrefixMessages = stripTranslatedThinkingFromMessages(event.preparation.turnPrefixMessages as any[]) as any;
-	});
-
-	pi.on("message_end", async (event, ctx): Promise<any> => {
+	pi.on("message_end", async (event, ctx): Promise<void> => {
 		// 每次处理时重读配置，方便用户调整目标语言和翻译模型后直接 /reload 或下一轮生效。
 		const config = loadConfig(ctx);
 		if (!config.enabled) return;
 
 		const message = event.message as AssistantMessage;
 		if (message.role !== "assistant" || !Array.isArray(message.content)) return;
-		if (hasTranslatedThinking(message)) return;
 
 		const translatorModel = resolveTranslatorModel(ctx, config);
 		if (!translatorModel) return;
 
 		try {
-			const translatedContent = await mergeTranslationsIntoThinkingBlocks(message.content, ctx, config, translatorModel);
-			if (translatedContent === message.content) return;
-
-			return {
-				message: {
-					...message,
-					content: translatedContent,
-				},
-			};
+			await notifyTranslationsForContent(message.content, ctx, config, translatorModel);
 		} catch (error) {
 			// 翻译失败不应影响主对话，只提示一次错误并保留原始消息。
 			const message = error instanceof Error ? error.message : String(error);
@@ -168,10 +138,6 @@ function mergeConfig(base: ResolvedTranslatorConfig, raw: TranslatorConfig): Res
 		...raw,
 		contentTypes: raw.contentTypes === undefined ? base.contentTypes : normalizeContentTypes(raw.contentTypes),
 		translatorModel: normalizeTranslatorModel(raw.translatorModel, base.translatorModel),
-		maxPersistedTranslations:
-			raw.maxPersistedTranslations === undefined
-				? base.maxPersistedTranslations
-				: normalizeMaxPersistedTranslations(raw.maxPersistedTranslations),
 	};
 }
 
@@ -228,7 +194,6 @@ function showConfigStatus(ctx: any): void {
 		`targetLanguage: ${state.config.targetLanguage}`,
 		`contentTypes: ${state.config.contentTypes.join(", ")}`,
 		`minLatinChars: ${state.config.minLatinChars}`,
-		`maxPersistedTranslations: ${state.config.maxPersistedTranslations}`,
 		`translatorModel: ${modelRef ? `${modelRef.provider}/${modelRef.id}` : "not configured"}`,
 		`model: ${modelStatus}`,
 		...state.paths.map((info) => `${info.scope} config: ${info.path} (${info.exists ? "found" : "not found"})`),
@@ -274,179 +239,46 @@ function normalizeContentTypes(value: unknown): TranslatableBlockType[] {
 	return normalized.length > 0 ? Array.from(new Set(normalized)) : DEFAULT_CONFIG.contentTypes;
 }
 
-function normalizeMaxPersistedTranslations(value: unknown): number {
-	// 允许用户把持久化窗口设为 0；非法值回退到默认窗口，避免配置错误导致清理失效。
-	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_CONFIG.maxPersistedTranslations;
-	return Math.max(0, Math.floor(value));
-}
-
-function hasTranslatedThinking(message: AssistantMessage): boolean {
-	// 用额外字段做内部标记，避免重复追加；该标记不会作为可见标题显示。
-	return (message.content ?? []).some(isTranslatedThinkingBlock);
-}
-
-function isTranslatedThinkingBlock(block: Record<string, unknown>): boolean {
-	// 同时识别旧版 translatedBy 标记和新版 displayOnly 元数据，便于清理已经写入的历史译文。
-	return block.translatedBy === TRANSLATED_BY_EXTENSION || !!getTranslationMarker(block);
-}
-
-function getTranslationMarker(block: Record<string, unknown>): Record<string, unknown> | undefined {
-	// marker 集中解析，保证过滤、还原、清理对 displayOnly 语义的判断一致。
-	const metadata = block.metadata;
-	if (!metadata || typeof metadata !== "object") return undefined;
-	const marker = (metadata as Record<string, unknown>)[TRANSLATION_METADATA_KEY];
-	if (!marker || typeof marker !== "object") return undefined;
-	return (marker as Record<string, unknown>).displayOnly === true ? (marker as Record<string, unknown>) : undefined;
-}
-
-function stripTranslatedThinkingFromMessages(messages: any[]): any[] {
-	// 保持消息数组结构不变，只移除本扩展添加的展示译文 block，便于 context 和 compaction 复用同一隔离逻辑。
-	let changed = false;
-	const stripped = messages.map((message) => {
-		const nextMessage = stripTranslatedThinkingFromMessage(message);
-		if (nextMessage !== message) changed = true;
-		return nextMessage;
-	});
-	return changed ? stripped : messages;
-}
-
-function stripTranslatedThinkingFromMessage(message: any): any {
-	// 只有 assistant 的 content block 可能包含展示译文；其他消息原样保留，避免误伤工具结果或用户输入。
-	if (message?.role !== "assistant" || !Array.isArray(message.content)) return message;
-
-	let changed = false;
-	const content: Array<Record<string, unknown>> = [];
-	for (const block of message.content as Array<Record<string, unknown>>) {
-		const restored = restoreOriginalThinkingBlock(block);
-		if (restored === undefined) {
-			changed = true;
-			continue;
-		}
-		if (restored !== block) changed = true;
-		content.push(restored);
-	}
-
-	return changed ? { ...message, content } : message;
-}
-
-function restoreOriginalThinkingBlock(block: Record<string, unknown>): Record<string, unknown> | undefined {
-	// 新版译文合并在原 thinking block 内，进入上下文前要还原原文；旧版独立译文 block 则直接丢弃。
-	const marker = getTranslationMarker(block);
-	if (!marker) return block.translatedBy === TRANSLATED_BY_EXTENSION ? undefined : block;
-
-	const originalField = marker.originalField === "text" ? "text" : "thinking";
-	const originalText = typeof marker.originalText === "string" ? marker.originalText : marker.originalThinking;
-	if (typeof originalText !== "string") return undefined;
-
-	const metadata = { ...((block.metadata as Record<string, unknown> | undefined) ?? {}) };
-	delete metadata[TRANSLATION_METADATA_KEY];
-	const restored: Record<string, unknown> = {
-		...block,
-		[originalField]: originalText,
-		metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-	};
-	delete restored.translatedBy;
-	if (restored.metadata === undefined) delete restored.metadata;
-	return restored;
-}
-
-function safePrunePersistedTranslations(ctx: any): void {
-	// 清理失败只影响降级保护，不应阻断主对话或翻译展示。
-	try {
-		prunePersistedTranslations(ctx, loadConfig(ctx));
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		ctx.ui.notify("thinking translation prune failed: " + message, "warning");
-	}
-}
-
-function prunePersistedTranslations(ctx: any, config: ResolvedTranslatorConfig): void {
-	// SessionManager 没有公开“更新旧消息”的 API，这里只重写当前 session JSONL，并同步修改 getEntries() 返回的内存对象。
-	const sessionFile = ctx.sessionManager.getSessionFile?.();
-	const entries = ctx.sessionManager.getEntries?.();
-	if (!sessionFile || !Array.isArray(entries)) return;
-
-	let remaining = config.maxPersistedTranslations;
-	let changed = false;
-	for (let index = entries.length - 1; index >= 0; index--) {
-		const entry = entries[index];
-		const message = entry?.type === "message" ? entry.message : undefined;
-		if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
-		if (!message.content.some(isTranslatedThinkingBlock)) continue;
-
-		if (remaining > 0) {
-			remaining--;
-			continue;
-		}
-
-		const stripped = stripTranslatedThinkingFromMessage(message);
-		if (stripped !== message) {
-			entry.message = stripped;
-			changed = true;
-		}
-	}
-
-	if (!changed) return;
-	writeSessionEntriesAtomically(sessionFile, entries);
-}
-
-function writeSessionEntriesAtomically(sessionFile: string, entries: unknown[]): void {
-	// 先写临时 JSONL 再 rename 覆盖，避免进程中断时把 session 文件截断成半成品。
-	const tempFile = join(dirname(sessionFile), `.${basename(sessionFile)}.${process.pid}.${Date.now()}.tmp`);
-	writeFileSync(tempFile, entries.map((entry: unknown) => JSON.stringify(entry)).join("\n") + "\n", "utf8");
-	renameSync(tempFile, sessionFile);
-}
-
-async function mergeTranslationsIntoThinkingBlocks(
+async function notifyTranslationsForContent(
 	content: Array<Record<string, unknown>>,
 	ctx: any,
 	config: ResolvedTranslatorConfig,
 	translatorModel: any,
-): Promise<Array<Record<string, unknown>>> {
-	// 把译文合并进同一个 source block，避免 Pi 最终消息排序变化时把译文和原文隔到正文两侧。
-	const nextContent: Array<Record<string, unknown>> = [];
-	let changed = false;
+): Promise<void> {
+	// 译文只通过临时 UI 提示展示，不写回 assistant message，避免影响后续上下文和 provider 缓存。
+	const notices: Array<{ source: TranslatableBlockSource; translation: string }> = [];
 
 	for (const block of content) {
 		const source = getTranslatableBlockSource(block, config);
-		if (!source || !shouldTranslate(source.text, config)) {
-			nextContent.push(block);
-			continue;
-		}
+		if (!source || !shouldTranslate(source.text, config)) continue;
 
 		const translated = await translateThinking(source.text, ctx, config, translatorModel);
 		const cleaned = cleanTranslation(translated);
-		if (!cleaned) {
-			nextContent.push(block);
-			continue;
-		}
+		if (!cleaned) continue;
 
-		nextContent.push({
-			...block,
-			[source.field]: `${source.text}\n\n${cleaned}`,
-			translatedBy: TRANSLATED_BY_EXTENSION,
-			metadata: {
-				...((block.metadata as Record<string, unknown> | undefined) ?? {}),
-				[TRANSLATION_METADATA_KEY]: {
-					displayOnly: true,
-					version: 3,
-					originalBlockType: source.type,
-					originalField: source.field,
-					originalText: source.text,
-					originalThinking: source.field === "thinking" ? source.text : undefined,
-				},
-			},
-		});
-		changed = true;
+		notices.push({ source, translation: cleaned });
 	}
 
-	return changed ? nextContent : content;
+	if (notices.length === 0) return;
+	ctx.ui.notify(formatTranslationNotice(notices), "info");
+}
+
+function formatTranslationNotice(notices: Array<{ source: TranslatableBlockSource; translation: string }>): string {
+	// 多个 block 合并成一次 notify，避免 Pi 连续 status 提示被折叠成只显示最后一条。
+	return notices
+		.map((notice) => `${getTranslationNoticeTitle(notice.source.type)}:\n${notice.translation}`)
+		.join("\n\n---\n\n");
+}
+
+function getTranslationNoticeTitle(type: TranslatableBlockType): string {
+	// 标题保留 block 来源，方便用户判断译文是在解释思考过程还是最终回答。
+	if (type === "text") return "Answer translation";
+	if (type === "reasoning" || type === "reasoning_summary") return "Reasoning translation";
+	return "Thinking translation";
 }
 
 function getTranslatableBlockSource(block: Record<string, unknown>, config: ResolvedTranslatorConfig): TranslatableBlockSource | undefined {
-	// 按配置白名单提取可翻译文本，并记录写回字段，方便 context 阶段精确还原原文。
-	if (isTranslatedThinkingBlock(block)) return undefined;
-
+	// 按配置白名单提取可翻译文本；译文只展示在 UI 中，不写回原 block。
 	const type = typeof block.type === "string" ? block.type : "";
 	if (!config.contentTypes.includes(type as TranslatableBlockType)) return undefined;
 	if (type === "thinking" && typeof block.thinking === "string") return { type, field: "thinking", text: block.thinking };
@@ -521,7 +353,5 @@ export const __testing = {
 	mergeConfig,
 	normalizeContentTypes,
 	normalizeTranslatorModel,
-	restoreOriginalThinkingBlock,
 	shouldTranslate,
-	stripTranslatedThinkingFromMessages,
 } as const;
