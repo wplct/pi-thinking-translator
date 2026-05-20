@@ -3,8 +3,18 @@
   "version": "0.1.0",
   "description": "Pi extension package for translating configured visible assistant content blocks.",
   "type": "module",
-  "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wplct/pi-thinking-translator.git"
+  },
+  "homepage": "https://github.com/wplct/pi-thinking-translator#readme",
+  "bugs": {
+    "url": "https://github.com/wplct/pi-thinking-translator/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
