@@ -54,14 +54,14 @@ pi -e /absolute/path/to/pi-thinking-translator
    ~/.pi/agent/thinking-translator.json
    ```
 
-4. Enable translation and point the extension at a Pi model:
+4. Enable translation and point the extension at a DeepSeek model:
 
    ```json
    {
      "enabled": true,
      "translatorModel": {
-       "provider": "ollama",
-       "id": "your-model-id"
+       "provider": "deepseek",
+       "id": "deepseek-v4-flash"
      }
    }
    ```
@@ -117,8 +117,8 @@ Project config overrides global config.
 {
   "enabled": true,
   "translatorModel": {
-    "provider": "ollama",
-    "id": "qwen2.5:3b-instruct"
+    "provider": "deepseek",
+    "id": "deepseek-v4-flash"
   }
 }
 ```
