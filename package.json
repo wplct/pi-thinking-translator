@@ -1,7 +1,7 @@
 {
   "name": "pi-thinking-translator",
   "version": "0.1.0",
-  "description": "Pi extension package for translating visible assistant thinking and reasoning summaries.",
+  "description": "Pi extension package for translating configured visible assistant content blocks.",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -14,7 +14,9 @@
     "translation"
   ],
   "scripts": {
-    "check": "tsc --noEmit --skipLibCheck --moduleResolution node --module esnext --target es2022 --types node extensions/thinking-translator.ts"
+    "typecheck": "tsc --noEmit --skipLibCheck --moduleResolution node --module esnext --target es2022 --types node extensions/thinking-translator.ts",
+    "test": "node --test tests/*.test.ts",
+    "check": "tsc --noEmit --skipLibCheck --moduleResolution node --module esnext --target es2022 --types node extensions/thinking-translator.ts && node --test tests/*.test.ts"
   },
   "files": [
     "extensions",
