@@ -1,0 +1,36 @@
+{
+  "name": "pi-thinking-translator",
+  "version": "0.1.0",
+  "description": "Pi extension package for translating visible assistant thinking and reasoning summaries.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "thinking",
+    "reasoning",
+    "translation"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit --skipLibCheck --moduleResolution node --module esnext --target es2022 --types node extensions/thinking-translator.ts"
+  },
+  "files": [
+    "extensions",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/thinking-translator.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.7.3"
+  }
+}
