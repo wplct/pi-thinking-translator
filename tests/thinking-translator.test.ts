@@ -72,23 +72,25 @@ test("getAssistantMessagesForTranslation keeps all assistant messages from curre
 	assert.deepEqual(__testing.getAssistantMessagesForTranslation([], [old, { role: "user", content: [] }, second]), [second]);
 });
 
-test("formatTranslationWidgetLines keeps translations in a UI-only panel", () => {
-	// 译文面板是传给 setWidget 的纯行数组，不需要构造 custom message 或 notify 文本。
-	const lines = __testing.formatTranslationWidgetLines([
+test("formatTranslationNotification keeps translations in a transient notification", () => {
+	// 译文通知是普通字符串，不需要构造 custom message 或持久 widget。
+	const message = __testing.formatTranslationNotification([
 		{ source: { type: "thinking", field: "thinking", text: "Need to inspect" }, translation: "需要检查" },
 		{ source: { type: "text", field: "text", text: "Done" }, translation: "完成\n下一步" },
 	]);
 
-	assert.deepEqual(lines, [
-		"Thinking Translator (2 blocks)",
-		"Thinking translation:",
-		"需要检查",
-		"---",
-		"Answer translation:",
-		"完成",
-		"下一步",
-		"/thinking-translator clear to hide",
-	]);
+	assert.equal(
+		message,
+		[
+			"Thinking Translator (2 blocks)",
+			"Thinking translation:",
+			"需要检查",
+			"---",
+			"Answer translation:",
+			"完成",
+			"下一步",
+		].join("\n"),
+	);
 });
 
 test("resolveTranslatorModel skips safely when registry or model is unavailable", () => {

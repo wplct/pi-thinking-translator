@@ -8,7 +8,7 @@ This package is a Pi extension for users who prefer to inspect visible assistant
 
 - Translates configured visible assistant content blocks after the agent turn finishes.
 - Uses a model already configured in Pi's model registry.
-- Shows translations in a transient Pi UI widget below the editor instead of the message stream.
+- Shows translations as transient Pi UI notifications instead of persistent widgets or message-stream entries.
 - Does not modify assistant messages, future model context, compaction input, or provider cache keys.
 - Supports optional translation of normal assistant `text` answers when explicitly enabled.
 - Supports global config with project-level overrides.
@@ -24,7 +24,7 @@ pi install npm:pi-thinking-translator
 Install from GitHub:
 
 ```bash
-pi install git:github.com/wplct/pi-thinking-translator@v0.1.0
+pi install git:github.com/wplct/pi-thinking-translator@v0.1.5
 ```
 
 For local development from a checkout:
@@ -85,7 +85,7 @@ The `provider` and `id` must match a model visible to Pi, for example a model co
 ```
 
 - `/thinking-translator` and `/thinking-translator status` show the effective config, config file paths, and translator model availability.
-- `/thinking-translator clear` hides the current temporary translation panel.
+- `/thinking-translator clear` clears any old temporary translation widget left by versions `0.1.3`/`0.1.4`.
 - `/thinking-translator init` creates the global config, same as `/thinking-translator init --global`.
 - `/thinking-translator init --global` creates `~/.pi/agent/thinking-translator.json` if it does not already exist.
 - `/thinking-translator init --project` creates `.pi/thinking-translator.json` in the current project if it does not already exist.
@@ -135,7 +135,7 @@ Create `.pi/thinking-translator.json` in that project:
 }
 ```
 
-When `text` is enabled, the translated answer is shown in the temporary translation panel. The extension still leaves the original assistant answer unchanged.
+When `text` is enabled, the translated answer is shown as a temporary UI notification. The extension still leaves the original assistant answer unchanged.
 
 ### Options
 
@@ -151,13 +151,13 @@ If translation is enabled but `translatorModel` is missing, cannot be found, or 
 
 ## How It Works
 
-1. After the agent turn finishes, the extension looks at the latest assistant message for configured translatable blocks.
-2. It sends the original visible block text to the configured Pi model with strict JSON-output instructions.
+1. During an agent turn, the extension records assistant messages that contain configured translatable blocks.
+2. After the agent turn finishes, it sends the original visible block text to the configured Pi model with strict JSON-output instructions.
 3. It parses only `{ "translation": "..." }`; non-JSON or malformed outputs are rejected instead of displayed.
-4. It shows the cleaned translation via a transient Pi UI widget below the editor.
+4. It shows the cleaned translation via a transient Pi UI notification.
 5. It does not call `sendMessage`, append a custom message, or return a modified assistant message, so translations are not written to the session file or future context.
 
-The translation panel is cleared on the next agent turn, session reload, or `/thinking-translator clear`. This design lets you inspect translations briefly to catch model drift while avoiding display translations becoming future model input or provider cache material.
+This design lets you inspect translations briefly to catch model drift while avoiding display translations becoming future model input or provider cache material.
 
 ## Security Notes
 
@@ -165,7 +165,7 @@ Pi extensions run with full system permissions. Review extension source before i
 
 Translation backends may receive the visible blocks enabled by `contentTypes`, including final assistant answers if `text` is enabled. Use a local model if that content should not leave your machine.
 
-The current implementation displays translations through a transient UI widget instead of notifications or assistant messages, so display translations do not enter future model context or compaction summaries.
+The current implementation displays translations through transient UI notifications instead of widgets or assistant messages, so display translations do not enter future model context or compaction summaries.
 
 ## Development
 

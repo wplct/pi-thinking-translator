@@ -47,13 +47,13 @@ let translationDisplayEpoch = 0;
 let currentTurnAssistantMessages: AssistantMessage[] = [];
 
 /**
- * 注册 thinking 翻译扩展；在整轮 agent 完成后用独立 widget 展示译文，避免改写会话消息和模型缓存。
+ * 注册 thinking 翻译扩展；在整轮 agent 完成后用临时通知展示译文，避免改写会话消息和模型缓存。
  */
 export default function thinkingTranslator(pi: ExtensionAPI) {
 	pi.registerCommand("thinking-translator", {
 		description: "Show or initialize thinking-translator configuration",
 		getArgumentCompletions: (prefix) => {
-			// 命令参数保持极简：默认 status，init 可显式选择全局或项目配置文件，clear 用于手动隐藏译文面板。
+			// 命令参数保持极简：默认 status，init 可显式选择全局或项目配置文件，clear 用于清理旧版本残留 widget。
 			const options = ["status", "clear", "init", "init --global", "init --project"];
 			return options.filter((option) => option.startsWith(prefix)).map((value) => ({ value, label: value }));
 		},
@@ -98,7 +98,7 @@ async function handleConfigCommand(args: string, ctx: any): Promise<void> {
 	const normalized = args.trim();
 	if (normalized === "clear") {
 		invalidateTranslationWidget(ctx);
-		ctx.ui.notify("thinking-translator translation panel cleared", "info");
+		ctx.ui.notify("thinking-translator old translation widget cleared", "info");
 		return;
 	}
 	if (normalized.startsWith("init")) {
@@ -350,20 +350,13 @@ async function notifyTranslationsForMessages(
 	}
 
 	if (notices.length === 0 || displayEpoch !== translationDisplayEpoch) return;
-	showTranslationWidget(ctx, notices);
+	showTranslationNotification(ctx, notices);
 }
 
-function showTranslationWidget(ctx: NotifierContext, notices: Array<{ source: TranslatableBlockSource; translation: string }>): void {
-	// 译文展示必须绕开 notify/sendMessage：widget 属于临时 UI 状态，不会追加会话 entry，也不会进入后续模型上下文。
-	const lines = formatTranslationWidgetLines(notices);
-	if (typeof ctx.ui?.setWidget === "function") {
-		ctx.ui.setWidget(TRANSLATION_WIDGET_KEY, lines, { placement: "belowEditor" });
-		ctx.ui.setStatus?.(TRANSLATION_WIDGET_KEY, `${notices.length} translated block${notices.length === 1 ? "" : "s"}`);
-		return;
-	}
-
-	// 无 widget 的运行模式不回退到 notify，避免把长译文混入消息流；只用 status 留一个轻量提示。
-	ctx.ui?.setStatus?.(TRANSLATION_WIDGET_KEY, "translation ready, widget UI unavailable");
+function showTranslationNotification(ctx: NotifierContext, notices: Array<{ source: TranslatableBlockSource; translation: string }>): void {
+	// 译文只用临时通知展示，不追加 assistant/custom message；同时清掉 0.1.3/0.1.4 可能遗留的 widget。
+	clearTranslationWidget(ctx);
+	ctx.ui?.notify?.(formatTranslationNotification(notices), "info");
 }
 
 function invalidateTranslationWidget(ctx: NotifierContext): void {
@@ -378,16 +371,15 @@ function clearTranslationWidget(ctx: NotifierContext): void {
 	ctx.ui?.setStatus?.(TRANSLATION_WIDGET_KEY, undefined);
 }
 
-function formatTranslationWidgetLines(notices: Array<{ source: TranslatableBlockSource; translation: string }>): string[] {
-	// 多个 block 合并到一个 widget 中，保留来源标题但不插入任何 assistant/custom message。
+function formatTranslationNotification(notices: Array<{ source: TranslatableBlockSource; translation: string }>): string {
+	// 多个 block 合并到一条临时通知中，保留来源标题但不插入任何 assistant/custom message。
 	const lines = [`Thinking Translator (${notices.length} block${notices.length === 1 ? "" : "s"})`];
 	for (const [index, notice] of notices.entries()) {
 		if (index > 0) lines.push("---");
 		lines.push(`${getTranslationNoticeTitle(notice.source.type)}:`);
 		lines.push(...notice.translation.split(/\r?\n/).map((line) => line || " "));
 	}
-	lines.push("/thinking-translator clear to hide");
-	return lines;
+	return lines.join("\n");
 }
 
 function getTranslationNoticeTitle(type: TranslatableBlockType): string {
@@ -523,7 +515,7 @@ export const __testing = {
 	getAssistantMessagesForTranslation,
 	mergeConfig,
 	extractTextResponse,
-	formatTranslationWidgetLines,
+	formatTranslationNotification,
 	parseTranslationJsonResponse,
 	getModelRegistry,
 	normalizeContentTypes,
