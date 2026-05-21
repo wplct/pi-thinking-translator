@@ -6,9 +6,9 @@ This package is a Pi extension for users who prefer to inspect visible assistant
 
 ## Features
 
-- Translates configured visible assistant content blocks after an assistant message finishes.
+- Translates configured visible assistant content blocks after the agent turn finishes.
 - Uses a model already configured in Pi's model registry.
-- Shows translations as transient Pi UI notifications.
+- Shows translations in a transient Pi UI widget below the editor instead of the message stream.
 - Does not modify assistant messages, future model context, compaction input, or provider cache keys.
 - Supports optional translation of normal assistant `text` answers when explicitly enabled.
 - Supports global config with project-level overrides.
@@ -78,12 +78,14 @@ The `provider` and `id` must match a model visible to Pi, for example a model co
 ```text
 /thinking-translator
 /thinking-translator status
+/thinking-translator clear
 /thinking-translator init
 /thinking-translator init --global
 /thinking-translator init --project
 ```
 
 - `/thinking-translator` and `/thinking-translator status` show the effective config, config file paths, and translator model availability.
+- `/thinking-translator clear` hides the current temporary translation panel.
 - `/thinking-translator init` creates the global config, same as `/thinking-translator init --global`.
 - `/thinking-translator init --global` creates `~/.pi/agent/thinking-translator.json` if it does not already exist.
 - `/thinking-translator init --project` creates `.pi/thinking-translator.json` in the current project if it does not already exist.
@@ -133,7 +135,7 @@ Create `.pi/thinking-translator.json` in that project:
 }
 ```
 
-When `text` is enabled, the translated answer is shown as a temporary UI notification. The extension still leaves the original assistant answer unchanged.
+When `text` is enabled, the translated answer is shown in the temporary translation panel. The extension still leaves the original assistant answer unchanged.
 
 ### Options
 
@@ -145,16 +147,17 @@ When `text` is enabled, the translated answer is shown as a temporary UI notific
 | `minLatinChars` | number | `24` | Minimum number of Latin letters required before a block is considered translatable. |
 | `translatorModel` | object | unset | Pi model reference: `{ "provider": "...", "id": "..." }`. |
 
-If translation is enabled but `translatorModel` is missing or cannot be found, the extension shows a warning and skips translation without affecting the main assistant message.
+If translation is enabled but `translatorModel` is missing, cannot be found, or the Pi model registry is unavailable, the extension shows a warning and skips translation without affecting the main assistant message. If a configured model request or credential lookup fails, the extension keeps the original assistant message unchanged and shows a warning for the first occurrence of that error.
 
 ## How It Works
 
-1. After an assistant message finishes, the extension looks for configured translatable blocks.
-2. It sends the original visible block text to the configured Pi model.
-3. It shows the cleaned translation via a transient Pi UI notification.
-4. It does not return a modified assistant message, so translations are not written to the session file.
+1. After the agent turn finishes, the extension looks at the latest assistant message for configured translatable blocks.
+2. It sends the original visible block text to the configured Pi model with strict JSON-output instructions.
+3. It parses only `{ "translation": "..." }`; non-JSON or malformed outputs are rejected instead of displayed.
+4. It shows the cleaned translation via a transient Pi UI widget below the editor.
+5. It does not call `sendMessage`, append a custom message, or return a modified assistant message, so translations are not written to the session file or future context.
 
-This design lets you inspect translations briefly to catch model drift while avoiding display translations becoming future model input or provider cache material.
+The translation panel is cleared on the next agent turn, session reload, or `/thinking-translator clear`. This design lets you inspect translations briefly to catch model drift while avoiding display translations becoming future model input or provider cache material.
 
 ## Security Notes
 
@@ -162,7 +165,7 @@ Pi extensions run with full system permissions. Review extension source before i
 
 Translation backends may receive the visible blocks enabled by `contentTypes`, including final assistant answers if `text` is enabled. Use a local model if that content should not leave your machine.
 
-The current implementation displays translations through transient UI notifications instead of storing them on assistant messages, so display translations do not enter future model context or compaction summaries.
+The current implementation displays translations through a transient UI widget instead of notifications or assistant messages, so display translations do not enter future model context or compaction summaries.
 
 ## Development
 

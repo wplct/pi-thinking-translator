@@ -54,3 +54,52 @@ test("cleanTranslation removes common model wrappers", () => {
 	assert.equal(__testing.cleanTranslation("<thinking>\n你好\n</thinking>"), "你好");
 	assert.equal(__testing.cleanTranslation("<text>\n你好\n</text>"), "你好");
 });
+
+test("parseTranslationJsonResponse requires translation JSON", () => {
+	// 翻译输出必须是 JSON，防止模型把源文本里的任务当成问题继续回答。
+	assert.equal(__testing.parseTranslationJsonResponse('{"translation":"需要检查文件"}'), "需要检查文件");
+	assert.equal(__testing.parseTranslationJsonResponse('```json\n{"translation":"需要检查"}\n```'), "需要检查");
+	assert.throws(() => __testing.parseTranslationJsonResponse("需要检查文件"), /non-JSON/);
+	assert.throws(() => __testing.parseTranslationJsonResponse('{"text":"需要检查"}'), /translation field/);
+});
+
+test("formatTranslationWidgetLines keeps translations in a UI-only panel", () => {
+	// 译文面板是传给 setWidget 的纯行数组，不需要构造 custom message 或 notify 文本。
+	const lines = __testing.formatTranslationWidgetLines([
+		{ source: { type: "thinking", field: "thinking", text: "Need to inspect" }, translation: "需要检查" },
+		{ source: { type: "text", field: "text", text: "Done" }, translation: "完成\n下一步" },
+	]);
+
+	assert.deepEqual(lines, [
+		"Thinking Translator (2 blocks)",
+		"Thinking translation:",
+		"需要检查",
+		"---",
+		"Answer translation:",
+		"完成",
+		"下一步",
+		"/thinking-translator clear to hide",
+	]);
+});
+
+test("resolveTranslatorModel skips safely when registry or model is unavailable", () => {
+	// 运行时缺少 modelRegistry 或找不到模型时只警告并跳过，不能影响主对话流程。
+	const notices: string[] = [];
+	const ctxWithoutRegistry = { ui: { notify: (message: string) => notices.push(message) } };
+	assert.equal(__testing.resolveTranslatorModel(ctxWithoutRegistry, { ...baseConfig, translatorModel: { provider: "missing", id: "model" } }), undefined);
+	assert.match(notices.at(-1) ?? "", /model registry is unavailable/);
+
+	const ctxWithMissingModel = {
+		ui: { notify: (message: string) => notices.push(message) },
+		modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true }) },
+	};
+	assert.equal(__testing.resolveTranslatorModel(ctxWithMissingModel, { ...baseConfig, translatorModel: { provider: "missing", id: "model" } }), undefined);
+	assert.match(notices.at(-1) ?? "", /model not found: missing\/model/);
+});
+
+test("extractTextResponse validates provider response shape", () => {
+	// provider 请求成功但响应结构异常时返回明确错误，正常文本块会被拼接成译文。
+	assert.equal(__testing.extractTextResponse({ content: [{ type: "text", text: "你好" }, { type: "tool_use", text: "ignored" }] }), "你好");
+	assert.throws(() => __testing.extractTextResponse(undefined), /invalid response/);
+	assert.throws(() => __testing.extractTextResponse({ content: null }), /invalid response/);
+});
