@@ -63,13 +63,13 @@ test("parseTranslationJsonResponse requires translation JSON", () => {
 	assert.throws(() => __testing.parseTranslationJsonResponse('{"text":"需要检查"}'), /translation field/);
 });
 
-test("getAssistantMessagesForTranslation keeps all assistant messages from current turn", () => {
-	// 一轮 agent 可能先发 thinking+tool_call，再发最终回答；必须保留本轮所有 assistant message。
-	const first = { role: "assistant", content: [{ type: "thinking", thinking: "Need to inspect" }] };
-	const second = { role: "assistant", content: [{ type: "text", text: "Done" }] };
-	const old = { role: "assistant", content: [{ type: "thinking", thinking: "Old thinking" }] };
-	assert.deepEqual(__testing.getAssistantMessagesForTranslation([first, second], [old]), [first, second]);
-	assert.deepEqual(__testing.getAssistantMessagesForTranslation([], [old, { role: "user", content: [] }, second]), [second]);
+test("getAssistantMessageForTranslation keeps only finished assistant messages", () => {
+	// message_end 只应该处理真正结束的 assistant 消息，user 和无内容消息都要跳过。
+	const assistant = { role: "assistant", content: [{ type: "thinking", thinking: "Need to inspect" }] };
+	const user = { role: "user", content: [] };
+	assert.deepEqual(__testing.getAssistantMessageForTranslation(assistant), assistant);
+	assert.equal(__testing.getAssistantMessageForTranslation(user), undefined);
+	assert.equal(__testing.getAssistantMessageForTranslation({ role: "assistant", content: null }), undefined);
 });
 
 test("formatTranslationNotification keeps translations in a transient notification", () => {

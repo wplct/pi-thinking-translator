@@ -1,6 +1,6 @@
 {
   "name": "pi-thinking-translator",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Pi extension package for translating configured visible assistant content blocks.",
   "type": "module",
   "license": "MIT",

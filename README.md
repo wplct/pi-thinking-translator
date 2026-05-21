@@ -6,7 +6,7 @@ This package is a Pi extension for users who prefer to inspect visible assistant
 
 ## Features
 
-- Translates configured visible assistant content blocks after the agent turn finishes.
+- Translates configured visible assistant content blocks when an assistant message ends.
 - Uses a model already configured in Pi's model registry.
 - Shows translations as transient Pi UI notifications instead of persistent widgets or message-stream entries.
 - Does not modify assistant messages, future model context, compaction input, or provider cache keys.
@@ -24,7 +24,7 @@ pi install npm:pi-thinking-translator
 Install from GitHub:
 
 ```bash
-pi install git:github.com/wplct/pi-thinking-translator@v0.1.5
+pi install git:github.com/wplct/pi-thinking-translator@v0.1.6
 ```
 
 For local development from a checkout:
@@ -151,8 +151,8 @@ If translation is enabled but `translatorModel` is missing, cannot be found, or 
 
 ## How It Works
 
-1. During an agent turn, the extension records assistant messages that contain configured translatable blocks.
-2. After the agent turn finishes, it sends the original visible block text to the configured Pi model with strict JSON-output instructions.
+1. During an agent turn, the extension listens for completed assistant messages that contain configured translatable blocks.
+2. After an assistant message ends, it sends the original visible block text to the configured Pi model with strict JSON-output instructions.
 3. It parses only `{ "translation": "..." }`; non-JSON or malformed outputs are rejected instead of displayed.
 4. It shows the cleaned translation via a transient Pi UI notification.
 5. It does not call `sendMessage`, append a custom message, or return a modified assistant message, so translations are not written to the session file or future context.
