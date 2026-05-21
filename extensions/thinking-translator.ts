@@ -44,6 +44,7 @@ const configErrorNotified = new Set<string>();
 let missingModelWarningKey: string | undefined;
 let translationFailureWarningKey: string | undefined;
 let translationDisplayEpoch = 0;
+let currentTurnAssistantMessages: AssistantMessage[] = [];
 
 /**
  * 注册 thinking 翻译扩展；在整轮 agent 完成后用独立 widget 展示译文，避免改写会话消息和模型缓存。
@@ -68,19 +69,27 @@ export default function thinkingTranslator(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
-		// 新一轮对话开始时隐藏旧译文，并让仍在后台翻译的旧任务失效。
+		// 新一轮对话开始时隐藏旧译文、清空本轮缓存，并让仍在后台翻译的旧任务失效。
+		currentTurnAssistantMessages = [];
 		invalidateTranslationWidget(ctx);
+	});
+
+	pi.on("message_end", (event): void => {
+		// agent_end 统一展示译文；这里先记录本轮所有 assistant message，避免工具调用后的最终回答覆盖前面的 thinking。
+		rememberAssistantMessage(event.message);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		// reload、quit 或切换会话前释放临时 UI 状态，避免下个 runtime 继承过期展示。
+		currentTurnAssistantMessages = [];
 		invalidateTranslationWidget(ctx);
 	});
 
 	pi.on("agent_end", (event, ctx): void => {
-		// 等整轮 agent 完成后再翻译最后一条 assistant 消息，避免译文在工具调用或原文流式输出中间插入。
+		// 等整轮 agent 完成后再一次性翻译本轮 assistant 消息，避免译文在工具调用或原文流式输出中间插入。
 		const displayEpoch = translationDisplayEpoch;
-		void translateLatestAssistantMessage(event.messages, ctx, displayEpoch);
+		const messages = getAssistantMessagesForTranslation(currentTurnAssistantMessages, event.messages);
+		void translateAssistantMessages(messages, ctx, displayEpoch);
 	});
 }
 
@@ -274,19 +283,16 @@ function normalizeContentTypes(value: unknown): TranslatableBlockType[] {
 	return normalized.length > 0 ? Array.from(new Set(normalized)) : DEFAULT_CONFIG.contentTypes;
 }
 
-async function translateLatestAssistantMessage(messages: unknown[], ctx: any, displayEpoch: number): Promise<void> {
+async function translateAssistantMessages(messages: AssistantMessage[], ctx: any, displayEpoch: number): Promise<void> {
 	// 每次处理时重读配置，方便用户调整目标语言和翻译模型后直接 /reload 或下一轮生效。
 	const config = loadConfig(ctx);
-	if (!config.enabled) return;
-
-	const message = findLastAssistantMessage(messages);
-	if (!message || !Array.isArray(message.content)) return;
+	if (!config.enabled || messages.length === 0) return;
 
 	const translatorModel = resolveTranslatorModel(ctx, config);
 	if (!translatorModel) return;
 
 	try {
-		await notifyTranslationsForContent(message.content, ctx, config, translatorModel, displayEpoch);
+		await notifyTranslationsForMessages(messages, ctx, config, translatorModel, displayEpoch);
 		if (displayEpoch === translationDisplayEpoch) translationFailureWarningKey = undefined;
 	} catch (error) {
 		// 旧任务失败不再提示，避免用户开始新一轮后看到上一轮的过期告警。
@@ -296,8 +302,21 @@ async function translateLatestAssistantMessage(messages: unknown[], ctx: any, di
 	}
 }
 
+function rememberAssistantMessage(message: unknown): void {
+	// 只缓存本轮真正含内容数组的 assistant message，避免用户/toolResult 等消息进入翻译流程。
+	const assistantMessage = message as AssistantMessage | undefined;
+	if (assistantMessage?.role === "assistant" && Array.isArray(assistantMessage.content)) currentTurnAssistantMessages.push(assistantMessage);
+}
+
+function getAssistantMessagesForTranslation(currentTurnMessages: AssistantMessage[], fallbackMessages: unknown[]): AssistantMessage[] {
+	// 优先使用 message_end 缓存的本轮全部 assistant message；没有缓存时才兼容 agent_end 的最后一条 assistant。
+	if (currentTurnMessages.length > 0) return currentTurnMessages.filter((message) => Array.isArray(message.content));
+	const last = findLastAssistantMessage(fallbackMessages);
+	return last && Array.isArray(last.content) ? [last] : [];
+}
+
 function findLastAssistantMessage(messages: unknown[]): AssistantMessage | undefined {
-	// agent_end 可能带上整段状态；只处理最后一条 assistant，避免重复翻译历史消息。
+	// fallback 只处理最后一条 assistant，避免在缺少 message_end 的运行时重复翻译历史消息。
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const message = messages[index] as AssistantMessage | undefined;
 		if (message?.role === "assistant") return message;
@@ -305,26 +324,29 @@ function findLastAssistantMessage(messages: unknown[]): AssistantMessage | undef
 	return undefined;
 }
 
-async function notifyTranslationsForContent(
-	content: Array<Record<string, unknown>>,
+async function notifyTranslationsForMessages(
+	messages: AssistantMessage[],
 	ctx: any,
 	config: ResolvedTranslatorConfig,
 	translatorModel: any,
 	displayEpoch: number,
 ): Promise<void> {
-	// 译文只通过临时 widget 展示，不写回 assistant message，避免影响后续上下文和 provider 缓存。
+	// 译文只通过临时 widget 汇总展示，不写回 assistant message，避免影响后续上下文和 provider 缓存。
 	const notices: Array<{ source: TranslatableBlockSource; translation: string }> = [];
 
-	for (const block of content) {
-		if (displayEpoch !== translationDisplayEpoch) return;
-		const source = getTranslatableBlockSource(block, config);
-		if (!source || !shouldTranslate(source.text, config)) continue;
+	for (const message of messages) {
+		if (!Array.isArray(message.content)) continue;
+		for (const block of message.content) {
+			if (displayEpoch !== translationDisplayEpoch) return;
+			const source = getTranslatableBlockSource(block, config);
+			if (!source || !shouldTranslate(source.text, config)) continue;
 
-		const translated = await translateThinking(source.text, ctx, config, translatorModel);
-		const cleaned = cleanTranslation(translated);
-		if (!cleaned) continue;
+			const translated = await translateThinking(source.text, ctx, config, translatorModel);
+			const cleaned = cleanTranslation(translated);
+			if (!cleaned) continue;
 
-		notices.push({ source, translation: cleaned });
+			notices.push({ source, translation: cleaned });
+		}
 	}
 
 	if (notices.length === 0 || displayEpoch !== translationDisplayEpoch) return;
@@ -498,6 +520,7 @@ export const __testing = {
 	cleanTranslation,
 	getProjectConfigPath,
 	getTranslatableBlockSource,
+	getAssistantMessagesForTranslation,
 	mergeConfig,
 	extractTextResponse,
 	formatTranslationWidgetLines,

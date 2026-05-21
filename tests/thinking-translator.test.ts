@@ -63,6 +63,15 @@ test("parseTranslationJsonResponse requires translation JSON", () => {
 	assert.throws(() => __testing.parseTranslationJsonResponse('{"text":"需要检查"}'), /translation field/);
 });
 
+test("getAssistantMessagesForTranslation keeps all assistant messages from current turn", () => {
+	// 一轮 agent 可能先发 thinking+tool_call，再发最终回答；必须保留本轮所有 assistant message。
+	const first = { role: "assistant", content: [{ type: "thinking", thinking: "Need to inspect" }] };
+	const second = { role: "assistant", content: [{ type: "text", text: "Done" }] };
+	const old = { role: "assistant", content: [{ type: "thinking", thinking: "Old thinking" }] };
+	assert.deepEqual(__testing.getAssistantMessagesForTranslation([first, second], [old]), [first, second]);
+	assert.deepEqual(__testing.getAssistantMessagesForTranslation([], [old, { role: "user", content: [] }, second]), [second]);
+});
+
 test("formatTranslationWidgetLines keeps translations in a UI-only panel", () => {
 	// 译文面板是传给 setWidget 的纯行数组，不需要构造 custom message 或 notify 文本。
 	const lines = __testing.formatTranslationWidgetLines([
