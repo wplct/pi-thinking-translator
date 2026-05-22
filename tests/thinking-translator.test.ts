@@ -64,7 +64,7 @@ test("parseTranslationJsonResponse requires translation JSON", () => {
 });
 
 test("getAssistantMessageForTranslation keeps only finished assistant messages", () => {
-	// message_end 只应该处理真正结束的 assistant 消息，user 和无内容消息都要跳过。
+	// 兼容旧的完整消息提取逻辑：user 和无内容消息都要跳过。
 	const assistant = { role: "assistant", content: [{ type: "thinking", thinking: "Need to inspect" }] };
 	const user = { role: "user", content: [] };
 	assert.deepEqual(__testing.getAssistantMessageForTranslation(assistant), assistant);
@@ -72,25 +72,29 @@ test("getAssistantMessageForTranslation keeps only finished assistant messages",
 	assert.equal(__testing.getAssistantMessageForTranslation({ role: "assistant", content: null }), undefined);
 });
 
-test("formatTranslationNotification keeps translations in a transient notification", () => {
-	// 译文通知是普通字符串，不需要构造 custom message 或持久 widget。
+test("getStreamEventBlockSource respects thinking_end and text_end config", () => {
+	// 流式翻译只在 block end 事件触发；text_end 必须由 contentTypes 显式启用。
+	assert.deepEqual(__testing.getStreamEventBlockSource({ type: "thinking_end", content: "Need to inspect" }, baseConfig), {
+		type: "thinking",
+		field: "thinking",
+		text: "Need to inspect",
+	});
+	assert.equal(__testing.getStreamEventBlockSource({ type: "text_end", content: "Done" }, baseConfig), undefined);
+	assert.deepEqual(__testing.getStreamEventBlockSource({ type: "text_end", content: "Done" }, { ...baseConfig, contentTypes: ["thinking", "text"] }), {
+		type: "text",
+		field: "text",
+		text: "Done",
+	});
+});
+
+test("formatTranslationNotification returns translation text only", () => {
+	// 通知不再添加 Thinking Translator、类型标题或分隔线，避免 UI 出现额外包装文本。
 	const message = __testing.formatTranslationNotification([
 		{ source: { type: "thinking", field: "thinking", text: "Need to inspect" }, translation: "需要检查" },
 		{ source: { type: "text", field: "text", text: "Done" }, translation: "完成\n下一步" },
 	]);
 
-	assert.equal(
-		message,
-		[
-			"Thinking Translator (2 blocks)",
-			"Thinking translation:",
-			"需要检查",
-			"---",
-			"Answer translation:",
-			"完成",
-			"下一步",
-		].join("\n"),
-	);
+	assert.equal(message, ["需要检查", "完成", "下一步"].join("\n"));
 });
 
 test("resolveTranslatorModel skips safely when registry or model is unavailable", () => {

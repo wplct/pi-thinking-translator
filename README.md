@@ -24,7 +24,7 @@ pi install npm:pi-thinking-translator
 Install from GitHub:
 
 ```bash
-pi install git:github.com/wplct/pi-thinking-translator@v0.1.6
+pi install git:github.com/wplct/pi-thinking-translator@v0.1.7
 ```
 
 For local development from a checkout:

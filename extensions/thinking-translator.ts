@@ -8,6 +8,7 @@ type AssistantMessage = { role: string; content?: Array<Record<string, unknown>>
 type ModelRef = { provider: string; id: string };
 type TranslatableBlockType = "thinking" | "reasoning" | "reasoning_summary" | "text";
 type TranslatableBlockSource = { type: TranslatableBlockType; field: "thinking" | "text"; text: string };
+type StreamTranslationEvent = { type?: unknown; content?: unknown };
 type TranslatorConfig = {
 	enabled?: boolean;
 	targetLanguage?: string;
@@ -46,7 +47,7 @@ let translationFailureWarningKey: string | undefined;
 let translationDisplayEpoch = 0;
 
 /**
- * 注册 thinking 翻译扩展；在 assistant 消息结束后用临时通知展示译文，避免改写会话消息和模型缓存。
+ * 注册 thinking/text 翻译扩展；在可翻译 block 结束时并行展示译文，避免改写会话消息和模型缓存。
  */
 export default function thinkingTranslator(pi: ExtensionAPI) {
 	pi.registerCommand("thinking-translator", {
@@ -72,11 +73,9 @@ export default function thinkingTranslator(pi: ExtensionAPI) {
 		invalidateTranslationWidget(ctx);
 	});
 
-	pi.on("message_end", (event, ctx): void => {
-		// assistant 消息结束后立刻翻译，避免等到整轮 agent 结束才显示译文。
-		const assistantMessage = getAssistantMessageForTranslation(event.message);
-		if (!assistantMessage) return;
-		void translateAssistantMessage(assistantMessage, ctx, translationDisplayEpoch);
+	pi.on("message_update", (event, ctx): void => {
+		// thinking_end/text_end 一到就启动独立翻译任务，不等待整条 assistant 消息结束或其他 block。
+		void translateStreamEventBlock(event.assistantMessageEvent, ctx, translationDisplayEpoch);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -282,16 +281,19 @@ function getAssistantMessageForTranslation(message: unknown): AssistantMessage |
 	return undefined;
 }
 
-async function translateAssistantMessage(message: AssistantMessage, ctx: any, displayEpoch: number): Promise<void> {
-	// assistant 消息一结束就翻译，避免等待整轮 agent 结束后才显示。
+async function translateStreamEventBlock(streamEvent: unknown, ctx: any, displayEpoch: number): Promise<void> {
+	// 每个 end 事件独立启动一个翻译任务；调用方不 await，因此多个 block 会自然并行。
 	const config = loadConfig(ctx);
 	if (!config.enabled) return;
+
+	const source = getStreamEventBlockSource(streamEvent, config);
+	if (!source || !shouldTranslate(source.text, config)) return;
 
 	const translatorModel = resolveTranslatorModel(ctx, config);
 	if (!translatorModel) return;
 
 	try {
-		await notifyTranslationsForMessages([message], ctx, config, translatorModel, displayEpoch);
+		await translateAndNotifyBlock(source, ctx, config, translatorModel, displayEpoch);
 		if (displayEpoch === translationDisplayEpoch) translationFailureWarningKey = undefined;
 	} catch (error) {
 		// 旧任务失败不再提示，避免用户开始新一轮后看到上一轮的过期告警。
@@ -301,39 +303,39 @@ async function translateAssistantMessage(message: AssistantMessage, ctx: any, di
 	}
 }
 
-async function notifyTranslationsForMessages(
-	messages: AssistantMessage[],
+async function translateAndNotifyBlock(
+	source: TranslatableBlockSource,
 	ctx: any,
 	config: ResolvedTranslatorConfig,
 	translatorModel: any,
 	displayEpoch: number,
 ): Promise<void> {
-	// 译文只通过临时 widget 汇总展示，不写回 assistant message，避免影响后续上下文和 provider 缓存。
-	const notices: Array<{ source: TranslatableBlockSource; translation: string }> = [];
-
-	for (const message of messages) {
-		if (!Array.isArray(message.content)) continue;
-		for (const block of message.content) {
-			if (displayEpoch !== translationDisplayEpoch) return;
-			const source = getTranslatableBlockSource(block, config);
-			if (!source || !shouldTranslate(source.text, config)) continue;
-
-			const translated = await translateThinking(source.text, ctx, config, translatorModel);
-			const cleaned = cleanTranslation(translated);
-			if (!cleaned) continue;
-
-			notices.push({ source, translation: cleaned });
-		}
-	}
-
-	if (notices.length === 0 || displayEpoch !== translationDisplayEpoch) return;
-	showTranslationNotification(ctx, notices);
+	// 单个 block 翻译完成后立即展示，不等待或拼接其他 block 的译文。
+	if (displayEpoch !== translationDisplayEpoch) return;
+	const translated = await translateThinking(source.text, ctx, config, translatorModel);
+	if (displayEpoch !== translationDisplayEpoch) return;
+	const cleaned = cleanTranslation(translated);
+	if (!cleaned) return;
+	showTranslationNotification(ctx, cleaned);
 }
 
-function showTranslationNotification(ctx: NotifierContext, notices: Array<{ source: TranslatableBlockSource; translation: string }>): void {
+function getStreamEventBlockSource(streamEvent: unknown, config: ResolvedTranslatorConfig): TranslatableBlockSource | undefined {
+	// 流式事件只在 block 完整结束时翻译：thinking_end 对应 thinking，text_end 对应配置启用的 text。
+	const event = streamEvent as StreamTranslationEvent | undefined;
+	if (!event || typeof event.content !== "string") return undefined;
+	if (event.type === "thinking_end" && config.contentTypes.includes("thinking")) {
+		return { type: "thinking", field: "thinking", text: event.content };
+	}
+	if (event.type === "text_end" && config.contentTypes.includes("text")) {
+		return { type: "text", field: "text", text: event.content };
+	}
+	return undefined;
+}
+
+function showTranslationNotification(ctx: NotifierContext, translation: string): void {
 	// 译文只用临时通知展示，不追加 assistant/custom message；同时清掉 0.1.3/0.1.4 可能遗留的 widget。
 	clearTranslationWidget(ctx);
-	ctx.ui?.notify?.(formatTranslationNotification(notices), "info");
+	ctx.ui?.notify?.(translation, "info");
 }
 
 function invalidateTranslationWidget(ctx: NotifierContext): void {
@@ -349,21 +351,8 @@ function clearTranslationWidget(ctx: NotifierContext): void {
 }
 
 function formatTranslationNotification(notices: Array<{ source: TranslatableBlockSource; translation: string }>): string {
-	// 多个 block 合并到一条临时通知中，保留来源标题但不插入任何 assistant/custom message。
-	const lines = [`Thinking Translator (${notices.length} block${notices.length === 1 ? "" : "s"})`];
-	for (const [index, notice] of notices.entries()) {
-		if (index > 0) lines.push("---");
-		lines.push(`${getTranslationNoticeTitle(notice.source.type)}:`);
-		lines.push(...notice.translation.split(/\r?\n/).map((line) => line || " "));
-	}
-	return lines.join("\n");
-}
-
-function getTranslationNoticeTitle(type: TranslatableBlockType): string {
-	// 标题保留 block 来源，方便用户判断译文是在解释思考过程还是最终回答。
-	if (type === "text") return "Answer translation";
-	if (type === "reasoning" || type === "reasoning_summary") return "Reasoning translation";
-	return "Thinking translation";
+	// 只返回译文正文；运行时每个 block 单独通知，不再添加标题、类型标签或分隔线。
+	return notices.map((notice) => notice.translation).join("\n").trim();
 }
 
 function getTranslatableBlockSource(block: Record<string, unknown>, config: ResolvedTranslatorConfig): TranslatableBlockSource | undefined {
@@ -493,6 +482,7 @@ export const __testing = {
 	mergeConfig,
 	extractTextResponse,
 	formatTranslationNotification,
+	getStreamEventBlockSource,
 	parseTranslationJsonResponse,
 	getModelRegistry,
 	normalizeContentTypes,
