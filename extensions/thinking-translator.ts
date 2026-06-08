@@ -8,7 +8,7 @@ import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 type AssistantMessage = { role: string; content?: Array<Record<string, unknown>> };
 type ModelRef = { provider: string; id: string };
 type TranslatableBlockType = "thinking" | "reasoning" | "reasoning_summary" | "text";
-type TranslatableBlockSource = { type: TranslatableBlockType; field: "thinking" | "text"; text: string };
+type TranslatableBlockSource = { type: TranslatableBlockType; field: "thinking" | "text"; text: string; final?: boolean };
 type StreamTranslationEvent = { type?: unknown; content?: unknown; delta?: unknown; contentIndex?: unknown };
 type ThinkingStreamBlockState = { text: string; translatedSectionCount: number };
 type TranslationEntry = { text: string; expiresAt: number };
@@ -349,7 +349,7 @@ async function translateStreamEventBlock(streamEvent: unknown, ctx: any, display
 
 	await Promise.allSettled(
 		sources.map(async ({ source, sequence }) => {
-			if (!shouldTranslate(source.text, config)) return;
+			if (!shouldTranslate(source.text, config) && !source.final) return;
 			try {
 				await translateAndShowBlock(source, ctx, config, translatorModel, displayEpoch, sequence);
 				if (displayEpoch === translationDisplayEpoch) translationFailureWarningKey = undefined;
@@ -422,7 +422,7 @@ function collectThinkingSegmentSources(
 
 	const latestSection = freshSections.at(-1);
 	if (!latestSection) return [];
-	return [{ source: { type: "thinking", field: "thinking", text: latestSection }, sequence: nextTranslationSequence() }];
+	return [{ source: { type: "thinking", field: "thinking", text: latestSection, final: finalized }, sequence: nextTranslationSequence() }];
 }
 
 /**
