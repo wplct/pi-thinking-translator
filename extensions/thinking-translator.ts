@@ -652,16 +652,15 @@ function clearTranslationWidget(ctx: NotifierContext): void {
 function getFadeColorFn(expiresAt: number): (s: string) => string {
 	if (!themeRef) return (s: string) => s;
 	const elapsed = Date.now() - (expiresAt - TRANSLATION_WIDGET_HIDE_DELAY_MS);
-	// 前 25 秒 muted，最后 5 秒分 10 档用 ANSI 256 灰阶平滑渐暗
+	// 只在最后 5 秒渐隐：0~25s muted，25~28s dim，28~30s 极暗
 	if (elapsed < 25_000) return (s: string) => themeRef.fg("muted", s);
-	const step = Math.min(9, Math.floor((elapsed - 25_000) / 500));
-	const gray = 250 - step * 2;
-	return (s: string) => `\x1b[38;5;${gray}m${s}\x1b[39m`;
+	if (elapsed < 28_000) return (s: string) => themeRef.fg("dim", s);
+	return (s: string) => `\x1b[38;5;236m${s}\x1b[39m`;
 }
 
 /**
- * 从累积的历史译文生成固定框展示行；分隔线 + 纯内容，
- * 前 25 秒 muted 灰，最后 5 秒 10 档 ANSI 256 灰阶渐暗。
+ * 从累积的历史译文生成固定框展示行；上下分隔线，中间纯内容，
+ * 按剩余时间渐隐文本色：muted(灰) → dim(暗灰) → 极暗(近黑)。
  * 标题和分隔线用 accent 色，无有效条目时返回空数组。
  */
 function formatTranslationWidgetLines(entries: TranslationEntry[], width: number): string[] {
