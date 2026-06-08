@@ -43,6 +43,7 @@ const TRANSLATION_WIDGET_TITLE = "思考翻译";
 const THINKING_TITLE_MAX_LENGTH = 40;
 const TRANSLATION_WIDGET_HIDE_DELAY_MS = 30_000;
 const MAX_WIDGET_BODY_LINES = 30;
+const MAX_LINE_WIDTH = 150;
 const TRANSLATION_WIDGET_PLACEMENT: WidgetPlacement = "aboveEditor";
 const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", CONFIG_FILE_NAME);
 const DEFAULT_CONFIG: ResolvedTranslatorConfig = {
@@ -575,11 +576,18 @@ function clearTranslationWidget(ctx: NotifierContext): void {
 /**
  * 从累积的历史译文生成固定框展示行；过滤已过期条目，只取最后 N 行正文。
  */
+function truncateLine(line: string): string {
+	if (line.length <= MAX_LINE_WIDTH) return line;
+	return line.slice(0, MAX_LINE_WIDTH - 1) + "…";
+}
+
 function formatTranslationWidgetLines(entries: TranslationEntry[]): string[] {
 	const active = entries.filter((e) => e.expiresAt > Date.now());
-	const allBodyLines = active.flatMap((e) => e.text.split("\n").map((line) => `│ ${line.trimEnd()}`));
+	const allBodyLines = active.flatMap((e) =>
+		e.text.split("\n").map((line) => truncateLine(`│ ${line.trimEnd()}`)),
+	);
 	const visible = allBodyLines.slice(-MAX_WIDGET_BODY_LINES);
-	return [`╭─ ${TRANSLATION_WIDGET_TITLE}`, ...visible, "╰─"];
+	return [truncateLine(`╭─ ${TRANSLATION_WIDGET_TITLE}`), ...visible, truncateLine("╰─")];
 }
 
 /**
