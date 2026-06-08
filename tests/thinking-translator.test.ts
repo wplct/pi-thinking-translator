@@ -117,13 +117,13 @@ test("formatTranslationWidgetLines renders widget from history array", () => {
 	assert.equal(result[1], "第一段");
 	assert.equal(result[2], "第二行");
 
-	// 超过 30 行正文时只保留最后 30 行
-	const many = Array.from({ length: 40 }, (_, i) => mk(`行${i + 1}`));
+	// 超过 20 行正文时只保留最后 20 行
+	const many = Array.from({ length: 30 }, (_, i) => mk(`行${i + 1}`));
 	const resultMany = __testing.formatTranslationWidgetLines(many, width);
-	assert.equal(resultMany.length, 31); // 标题 + 30 行正文
+	assert.equal(resultMany.length, 21); // 标题 + 20 行正文
 	assert.ok(resultMany[0]?.includes("思考翻译"));
 	assert.equal(resultMany[1], "行11");
-	assert.equal(resultMany[30], "行40");
+	assert.equal(resultMany[20], "行30");
 });
 
 test("formatTranslationWidgetLines filters expired entries", () => {
