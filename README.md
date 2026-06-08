@@ -146,7 +146,7 @@ When `text` is enabled, the translated answer is shown in the same temporary wid
 | `enabled` | boolean | `true` | Enables translation processing. If no `translatorModel` is configured, translation is skipped with a warning. |
 | `targetLanguage` | string | `"Simplified Chinese"` | Target language passed to the translator model. |
 | `contentTypes` | string[] | `["thinking"]` | Visible assistant block types to translate. Supported values: `thinking`, `reasoning`, `reasoning_summary`, `text`. |
-| `minLatinChars` | number | `24` | Minimum number of Latin letters required before a block is considered translatable. |
+| `minLatinChars` | number | `250` | Minimum number of Latin letters required before a block is considered translatable. |
 | `translatorModel` | object | unset | Pi model reference: `{ "provider": "...", "id": "..." }`. |
 
 If translation is enabled but `translatorModel` is missing, cannot be found, or the Pi model registry is unavailable, the extension shows a warning and skips translation without affecting the main assistant message. If a configured model request or credential lookup fails, the extension keeps the original assistant message unchanged and shows a warning for the first occurrence of that error.

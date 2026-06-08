@@ -50,7 +50,7 @@ const DEFAULT_CONFIG: ResolvedTranslatorConfig = {
 	enabled: true,
 	targetLanguage: "Simplified Chinese",
 	contentTypes: ["thinking"],
-	minLatinChars: 24,
+	minLatinChars: 250,
 };
 const configErrorNotified = new Set<string>();
 const thinkingStreamBlocks = new Map<string, ThinkingStreamBlockState>();
