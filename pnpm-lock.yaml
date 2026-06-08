@@ -15,6 +15,9 @@ importers:
         specifier: '*'
         version: 0.75.3(ws@8.20.1)(zod@4.4.3)
     devDependencies:
+      '@earendil-works/pi-tui':
+        specifier: 0.74.1
+        version: 0.74.1
       '@types/node':
         specifier: ^24.3.0
         version: 24.12.4
@@ -147,6 +150,10 @@ packages:
     resolution: {integrity: sha512-LIi5/CdUBfcLp3BAtpLx1BfnHDLmDOQVdzYfS1H9fjjCw2dcPr9voSI5ncrhvZdgyFSnfHck4BCbNcfZk+TEHQ==}
     engines: {node: '>=22.19.0'}
     hasBin: true
+
+  '@earendil-works/pi-tui@0.74.1':
+    resolution: {integrity: sha512-wQj2TRG43/BBNyd/lReQJWtTCOJVyIwI+7Ifp3hNITfTtQr4zQdMeF7uxqEMQ73LI6rQO7Ljx0P2w+oMx8uyIA==}
+    engines: {node: '>=20.0.0'}
 
   '@earendil-works/pi-tui@0.75.3':
     resolution: {integrity: sha512-UbhtCsae+b3Y8/ZxtBPhiOrkD66gOHvJbfvLZwhBBsNtQuvUkZY5t9MQwmb8QcDYkFRnXHaq3FcEy1hjRSfj6w==}
@@ -890,6 +897,13 @@ snapshots:
       - utf-8-validate
       - ws
       - zod
+
+  '@earendil-works/pi-tui@0.74.1':
+    dependencies:
+      get-east-asian-width: 1.6.0
+      marked: 15.0.12
+    optionalDependencies:
+      koffi: 2.16.2
 
   '@earendil-works/pi-tui@0.75.3':
     dependencies:

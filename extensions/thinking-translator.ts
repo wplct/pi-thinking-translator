@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 type AssistantMessage = { role: string; content?: Array<Record<string, unknown>> };
 type ModelRef = { provider: string; id: string };
@@ -43,7 +44,6 @@ const TRANSLATION_WIDGET_TITLE = "思考翻译";
 const THINKING_TITLE_MAX_LENGTH = 40;
 const TRANSLATION_WIDGET_HIDE_DELAY_MS = 30_000;
 const MAX_WIDGET_BODY_LINES = 30;
-const MAX_LINE_WIDTH = 150;
 const TRANSLATION_WIDGET_PLACEMENT: WidgetPlacement = "aboveEditor";
 const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", CONFIG_FILE_NAME);
 const DEFAULT_CONFIG: ResolvedTranslatorConfig = {
@@ -478,13 +478,13 @@ async function translateAndShowBlock(
  */
 function ensureWidget(ctx: NotifierContext): void {
 	if (widgetSetup) return;
-	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, (tui: any, _theme: any) => {
+	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, ((tui: any, _theme: any) => {
 		tuiRef = tui;
 		return {
-			render: () => formatTranslationWidgetLines(translationEntries),
+			render: (width: number) => formatTranslationWidgetLines(translationEntries, width),
 			invalidate: () => {},
 		};
-	}, { placement: TRANSLATION_WIDGET_PLACEMENT });
+	}) as any, { placement: TRANSLATION_WIDGET_PLACEMENT });
 	widgetSetup = true;
 }
 
@@ -574,20 +574,27 @@ function clearTranslationWidget(ctx: NotifierContext): void {
 }
 
 /**
- * 从累积的历史译文生成固定框展示行；过滤已过期条目，只取最后 N 行正文。
+ * 从累积的历史译文生成固定框展示行；超长行自动按终端列宽换行。
+ * 标题和边框用 truncateToWidth 防止超出，正文用 wrapTextWithAnsi 自动折行，
+ * 过滤已过期条目，只取最后 N 行正文。
  */
-function truncateLine(line: string): string {
-	if (line.length <= MAX_LINE_WIDTH) return line;
-	return line.slice(0, MAX_LINE_WIDTH - 1) + "…";
-}
-
-function formatTranslationWidgetLines(entries: TranslationEntry[]): string[] {
+function formatTranslationWidgetLines(entries: TranslationEntry[], width: number): string[] {
 	const active = entries.filter((e) => e.expiresAt > Date.now());
-	const allBodyLines = active.flatMap((e) =>
-		e.text.split("\n").map((line) => truncateLine(`│ ${line.trimEnd()}`)),
-	);
+	// 正文区可用宽度：预留 "│ " 前缀的 2 列
+	const bodyWidth = Math.max(1, width - visibleWidth("│ "));
+	const allBodyLines = active.flatMap((e) => {
+		const paragraphs = e.text.split("\n");
+		return paragraphs.flatMap((para) => {
+			const wrapped = wrapTextWithAnsi(para, bodyWidth);
+			return wrapped.map((line) => `│ ${line}`);
+		});
+	});
 	const visible = allBodyLines.slice(-MAX_WIDGET_BODY_LINES);
-	return [truncateLine(`╭─ ${TRANSLATION_WIDGET_TITLE}`), ...visible, truncateLine("╰─")];
+	return [
+		truncateToWidth(`╭─ ${TRANSLATION_WIDGET_TITLE}`, width, "…"),
+		...visible,
+		truncateToWidth("╰─", width, ""),
+	];
 }
 
 /**

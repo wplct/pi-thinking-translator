@@ -124,16 +124,46 @@ test("getCompletedThinkingSections excludes trailing unfinished section", () => 
 	]);
 });
 
+test("formatTranslationWidgetLines wraps long CJK lines instead of truncating", () => {
+	// 中文超长行应自动换行，而非截断加省略号。
+	const width = 20;
+	const future = Date.now() + 60_000;
+	// 12 个中文字符 = 24 列 > width 20，应换行
+	const result = __testing.formatTranslationWidgetLines([{ text: "这是一段很长的中文翻译内容", expiresAt: future }], width);
+	// 应产出多条正文行
+	assert.equal(result[0], "╭─ 思考翻译");
+	assert.ok(result.length > 3, "长中文应该产生多行");
+	// 每行不应超出宽度
+	result.forEach((line, i) => {
+		// 用简单近似检查：不包含 "…"（说明没截断）
+		assert.ok(!line.includes("…"), `行${i}不应被截断: ${line}`);
+	});
+});
+
+test("formatTranslationWidgetLines wraps mixed CJK+ASCII correctly", () => {
+	// 中英混合内容按终端列宽换行，不丢失英文单词。
+	const width = 30;
+	const future = Date.now() + 60_000;
+	const result = __testing.formatTranslationWidgetLines([{ text: "需要检查 plugin 配置文件是否正确加载", expiresAt: future }], width);
+	// 应换行
+	const bodyLines = result.slice(1, -1);
+	assert.ok(bodyLines.length >= 2, `应该至少有 2 行正文，实际 ${bodyLines.length}`);
+	bodyLines.forEach((line, i) => {
+		assert.ok(line.startsWith("│ "), `正文行${i}应以 │ 开头: ${line}`);
+	});
+});
+
 test("formatTranslationWidgetLines renders widget from history array", () => {
 	// 多段累积：过滤过期条目，只显示最后 MAX_WIDGET_BODY_LINES 行正文。
+	const width = 80;
 	const future = Date.now() + 60_000;
 	const mk = (text: string) => ({ text, expiresAt: future });
 
-	assert.deepEqual(__testing.formatTranslationWidgetLines([mk("第一段\n第二行")]), ["╭─ 思考翻译", "│ 第一段", "│ 第二行", "╰─"]);
+	assert.deepEqual(__testing.formatTranslationWidgetLines([mk("第一段\n第二行")], width), ["╭─ 思考翻译", "│ 第一段", "│ 第二行", "╰─"]);
 
 	// 超过 30 行正文时只保留最后 30 行
 	const many = Array.from({ length: 40 }, (_, i) => mk(`行${i + 1}`));
-	const result = __testing.formatTranslationWidgetLines(many);
+	const result = __testing.formatTranslationWidgetLines(many, width);
 	assert.equal(result.length, 32); // 标题 + 30 行正文 + 底部边框
 	assert.equal(result[0], "╭─ 思考翻译");
 	assert.equal(result[1], "│ 行11");
@@ -142,10 +172,11 @@ test("formatTranslationWidgetLines renders widget from history array", () => {
 });
 
 test("formatTranslationWidgetLines filters expired entries", () => {
+	const width = 80;
 	const past = Date.now() - 1000;
 	const future = Date.now() + 60_000;
 	const entries = [{ text: "过期文本", expiresAt: past }, { text: "有效文本", expiresAt: future }];
-	const result = __testing.formatTranslationWidgetLines(entries);
+	const result = __testing.formatTranslationWidgetLines(entries, width);
 	assert.equal(result.length, 3);
 	assert.equal(result[1], "│ 有效文本");
 });
