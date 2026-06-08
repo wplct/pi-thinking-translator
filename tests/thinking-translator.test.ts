@@ -131,13 +131,14 @@ test("formatTranslationWidgetLines renders widget from history array", () => {
 
 	assert.deepEqual(__testing.formatTranslationWidgetLines([mk("第一段\n第二行")]), ["╭─ 思考翻译", "│ 第一段", "│ 第二行", "╰─"]);
 
-	const long = ["行1","行2","行3","行4","行5","行6","行7","行8","行9","行10","行11"].map(mk);
-	const result = __testing.formatTranslationWidgetLines(long);
-	assert.equal(result.length, 10);
+	// 超过 30 行正文时只保留最后 30 行
+	const many = Array.from({ length: 40 }, (_, i) => mk(`行${i + 1}`));
+	const result = __testing.formatTranslationWidgetLines(many);
+	assert.equal(result.length, 32); // 标题 + 30 行正文 + 底部边框
 	assert.equal(result[0], "╭─ 思考翻译");
-	assert.equal(result[1], "│ 行4");
-	assert.equal(result[8], "│ 行11");
-	assert.equal(result[9], "╰─");
+	assert.equal(result[1], "│ 行11");
+	assert.equal(result[30], "│ 行40");
+	assert.equal(result[31], "╰─");
 });
 
 test("formatTranslationWidgetLines filters expired entries", () => {
