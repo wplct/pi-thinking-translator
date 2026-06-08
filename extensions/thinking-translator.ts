@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { stream } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Markdown, truncateToWidth } from "@earendil-works/pi-tui";
 
 type AssistantMessage = { role: string; content?: Array<Record<string, unknown>> };
 type ModelRef = { provider: string; id: string };
@@ -65,6 +66,7 @@ let pendingTranslationHideTimer: ReturnType<typeof setTimeout> | undefined;
 let expiryCleanupTimer: ReturnType<typeof setTimeout> | undefined;
 let tuiRef: any = undefined;
 let themeRef: any = undefined;
+let markdownTheme: any = undefined;
 let widgetSetup = false;
 
 /**
@@ -677,13 +679,14 @@ function formatTranslationWidgetLines(entries: TranslationEntry[], width: number
 	const titleLine = truncateToWidth(`── ${TRANSLATION_WIDGET_TITLE} ${sep}`, width, "");
 	const coloredTitle = themeRef?.fg("accent", titleLine) ?? titleLine;
 
+	// 延迟初始化 markdown 主题，避免模块加载时依赖未就绪
+	if (!markdownTheme) markdownTheme = getMarkdownTheme();
+
 	const allBodyLines = active.flatMap((e) => {
 		const colorFn = getFadeColorFn(e.expiresAt);
-		const paragraphs = e.text.split("\n");
-		return paragraphs.flatMap((para) => {
-			const wrapped = wrapTextWithAnsi(para, width);
-			return wrapped.map((line) => colorFn(line));
-		});
+		// 用 Markdown 组件渲染，defaultTextStyle.color 传入渐变色
+		const md = new Markdown(e.text, 0, 0, markdownTheme, { color: colorFn });
+		return md.render(width).map((line) => line.trimEnd());
 	});
 
 	const visible = allBodyLines.slice(-MAX_WIDGET_BODY_LINES);
