@@ -72,29 +72,61 @@ test("getAssistantMessageForTranslation keeps only finished assistant messages",
 	assert.equal(__testing.getAssistantMessageForTranslation({ role: "assistant", content: null }), undefined);
 });
 
-test("getStreamEventBlockSource respects thinking_end and text_end config", () => {
-	// 流式翻译只在 block end 事件触发；text_end 必须由 contentTypes 显式启用。
-	assert.deepEqual(__testing.getStreamEventBlockSource({ type: "thinking_end", content: "Need to inspect" }, baseConfig), {
-		type: "thinking",
-		field: "thinking",
-		text: "Need to inspect",
-	});
-	assert.equal(__testing.getStreamEventBlockSource({ type: "text_end", content: "Done" }, baseConfig), undefined);
-	assert.deepEqual(__testing.getStreamEventBlockSource({ type: "text_end", content: "Done" }, { ...baseConfig, contentTypes: ["thinking", "text"] }), {
-		type: "text",
-		field: "text",
-		text: "Done",
-	});
+test("isThinkingTitleLine detects short title followed by blank line", () => {
+	// 行级启发式只负责识别“标题行 + 空行”边界，供流式时机判断使用。
+	const lines = ["Searching for plugins", "", "I should inspect the filesystem first."];
+	assert.equal(__testing.isThinkingTitleLine(lines, 0), true);
+	assert.equal(__testing.isThinkingTitleLine(["This line is intentionally much longer than forty characters and should not count", "", "Body"], 0), false);
+	assert.equal(__testing.isThinkingTitleLine(["Body before", "Searching for plugins", "", "Body after"], 1), false);
 });
 
-test("formatTranslationNotification returns translation text only", () => {
-	// 通知不再添加 Thinking Translator、类型标题或分隔线，避免 UI 出现额外包装文本。
-	const message = __testing.formatTranslationNotification([
-		{ source: { type: "thinking", field: "thinking", text: "Need to inspect" }, translation: "需要检查" },
-		{ source: { type: "text", field: "text", text: "Done" }, translation: "完成\n下一步" },
-	]);
+test("isShortTitleParagraph keeps only short single-line paragraphs as titles", () => {
+	// 真正的分段以空行分段后的段落为单位：只有短单行段落才会与后一个正文段合并。
+	assert.equal(__testing.isShortTitleParagraph("Searching for plugins"), true);
+	assert.equal(__testing.isShortTitleParagraph("Searching for plugins\nMore"), false);
+	assert.equal(__testing.isShortTitleParagraph("This paragraph is intentionally much longer than forty characters and should not count"), false);
+});
 
-	assert.equal(message, ["需要检查", "完成", "下一步"].join("\n"));
+test("splitThinkingSections groups title and body into one section", () => {
+	// 短标题和它后面的正文应该合并成一个段，下一组标题再开新段。
+	const text = [
+		"Searching for plugins",
+		"",
+		"I should inspect the filesystem first.",
+		"",
+		"Locating the plugin",
+		"",
+		"I found a likely repository path.",
+	].join("\n");
+
+	assert.deepEqual(__testing.splitThinkingSections(text), [
+		["Searching for plugins", "", "I should inspect the filesystem first."].join("\n"),
+		["Locating the plugin", "", "I found a likely repository path."].join("\n"),
+	]);
+});
+
+test("getCompletedThinkingSections excludes trailing unfinished section", () => {
+	// thinking 尚未结束时，只能翻译已经被下一段标题闭合的上一段。
+	const text = [
+		"Searching for plugins",
+		"",
+		"I should inspect the filesystem first.",
+		"",
+		"Locating the plugin",
+		"",
+		"I found a likely repository path.",
+	].join("\n");
+
+	assert.deepEqual(__testing.getCompletedThinkingSections(text, false), [["Searching for plugins", "", "I should inspect the filesystem first."].join("\n")]);
+	assert.deepEqual(__testing.getCompletedThinkingSections(text, true), [
+		["Searching for plugins", "", "I should inspect the filesystem first."].join("\n"),
+		["Locating the plugin", "", "I found a likely repository path."].join("\n"),
+	]);
+});
+
+test("formatTranslationWidgetLines renders compact fixed widget", () => {
+	// 固定框只保留标题和译文正文，不再复用通知式文本包装。
+	assert.deepEqual(__testing.formatTranslationWidgetLines("第一段\n第二行"), ["╭─ 思考翻译", "│ 第一段", "│ 第二行", "╰─"]);
 });
 
 test("resolveTranslatorModel skips safely when registry or model is unavailable", () => {
