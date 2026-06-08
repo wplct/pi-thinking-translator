@@ -10,6 +10,7 @@ type TranslatableBlockType = "thinking" | "reasoning" | "reasoning_summary" | "t
 type TranslatableBlockSource = { type: TranslatableBlockType; field: "thinking" | "text"; text: string };
 type StreamTranslationEvent = { type?: unknown; content?: unknown; delta?: unknown; contentIndex?: unknown };
 type ThinkingStreamBlockState = { text: string; translatedSectionCount: number };
+type TranslationEntry = { text: string; expiresAt: number };
 type TranslatorConfig = {
 	enabled?: boolean;
 	targetLanguage?: string;
@@ -23,7 +24,10 @@ type WidgetPlacement = "aboveEditor" | "belowEditor";
 type NotifierContext = {
 	ui?: {
 		notify?: (message: string, level?: NotifyLevel) => void;
-		setWidget?: (key: string, content: string[] | undefined, options?: { placement?: WidgetPlacement }) => void;
+		setWidget?: {
+			(key: string, content: string[] | undefined, options?: { placement?: WidgetPlacement }): void;
+			(key: string, content: ((tui: any, theme: any) => { render(): string[]; invalidate(): void }) | undefined, options?: { placement?: WidgetPlacement }): void;
+		};
 		setStatus?: (key: string, text: string | undefined) => void;
 	};
 	cwd?: string;
@@ -55,8 +59,11 @@ let translationDisplayEpoch = 0;
 let currentAssistantMessageSerial = 0;
 let latestTranslationDisplaySequence = 0;
 let translationRequestSequence = 0;
-let translationHistory: string[] = [];
+let translationEntries: TranslationEntry[] = [];
 let pendingTranslationHideTimer: ReturnType<typeof setTimeout> | undefined;
+let expiryCleanupTimer: ReturnType<typeof setTimeout> | undefined;
+let tuiRef: any = undefined;
+let widgetSetup = false;
 
 /**
  * 注册 thinking/text 翻译扩展；把译文展示在编辑器上方的固定框里，不改写会话消息和模型缓存。
@@ -466,16 +473,63 @@ async function translateAndShowBlock(
 }
 
 /**
- * 刷新固定翻译框；新译文追加到历史列表而不是替换，短段不会被立即挤出。
+ * 注册 widget component 工厂（仅首次）；后续用 tuiRef.requestRender 刷新。
+ */
+function ensureWidget(ctx: NotifierContext): void {
+	if (widgetSetup) return;
+	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, (tui: any, _theme: any) => {
+		tuiRef = tui;
+		return {
+			render: () => formatTranslationWidgetLines(translationEntries),
+			invalidate: () => {},
+		};
+	}, { placement: TRANSLATION_WIDGET_PLACEMENT });
+	widgetSetup = true;
+}
+
+/**
+ * 调度下一个过期清理；取当前生效条目中最接近的到期时间，到点后过滤并重绘，再链式调度。
+ */
+function scheduleExpiryCleanup(): void {
+	const now = Date.now();
+	const next = translationEntries.filter((e) => e.expiresAt > now).sort((a, b) => a.expiresAt - b.expiresAt)[0];
+	if (!next) return;
+	expiryCleanupTimer = setTimeout(() => {
+		purgeExpiredEntries();
+		tuiRef?.requestRender?.();
+		scheduleExpiryCleanup();
+	}, Math.max(next.expiresAt - now, 0) + 50);
+}
+
+/**
+ * 移除所有已过期的翻译条目。
+ */
+function purgeExpiredEntries(): void {
+	translationEntries = translationEntries.filter((e) => e.expiresAt > Date.now());
+}
+
+/**
+ * 清理过期清理定时器。
+ */
+function clearExpiryCleanupTimer(): void {
+	if (!expiryCleanupTimer) return;
+	clearTimeout(expiryCleanupTimer);
+	expiryCleanupTimer = undefined;
+}
+
+/**
+ * 刷新固定翻译框；每段新译文带上自己 30 秒独立过期时间。
  */
 function showTranslationWidget(ctx: NotifierContext, translation: string, displayEpoch: number, displaySequence: number): void {
 	if (displayEpoch !== translationDisplayEpoch) return;
 	if (displaySequence < latestTranslationDisplaySequence) return;
 	latestTranslationDisplaySequence = displaySequence;
-	translationHistory.push(translation);
+	translationEntries.push({ text: translation, expiresAt: Date.now() + TRANSLATION_WIDGET_HIDE_DELAY_MS });
 	clearTranslationHideTimer();
-	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, formatTranslationWidgetLines(translationHistory), { placement: TRANSLATION_WIDGET_PLACEMENT });
-	ctx.ui?.setStatus?.(TRANSLATION_WIDGET_KEY, undefined);
+	clearExpiryCleanupTimer();
+	ensureWidget(ctx);
+	tuiRef?.requestRender?.();
+	scheduleExpiryCleanup();
 	pendingTranslationHideTimer = setTimeout(() => {
 		if (displayEpoch !== translationDisplayEpoch) return;
 		clearTranslationWidget(ctx);
@@ -501,7 +555,9 @@ function invalidateTranslationWidget(ctx: NotifierContext): void {
 	translationRequestSequence = 0;
 	thinkingStreamBlocks.clear();
 	clearTranslationHideTimer();
-	translationHistory = [];
+	clearExpiryCleanupTimer();
+	translationEntries = [];
+	widgetSetup = false;
 	clearTranslationWidget(ctx);
 }
 
@@ -509,16 +565,19 @@ function invalidateTranslationWidget(ctx: NotifierContext): void {
  * 清空固定翻译框和关联状态栏；避免旧译文残留到下一轮或下个会话。
  */
 function clearTranslationWidget(ctx: NotifierContext): void {
-	translationHistory = [];
+	translationEntries = [];
+	clearExpiryCleanupTimer();
+	widgetSetup = false;
 	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, undefined, { placement: TRANSLATION_WIDGET_PLACEMENT });
 	ctx.ui?.setStatus?.(TRANSLATION_WIDGET_KEY, undefined);
 }
 
 /**
- * 从累积的历史译文生成固定框展示行；只取最后 N 行正文，旧内容自动滚出视野。
+ * 从累积的历史译文生成固定框展示行；过滤已过期条目，只取最后 N 行正文。
  */
-function formatTranslationWidgetLines(history: string[]): string[] {
-	const allBodyLines = history.flatMap((text) => text.split("\n").map((line) => `│ ${line.trimEnd()}`));
+function formatTranslationWidgetLines(entries: TranslationEntry[]): string[] {
+	const active = entries.filter((e) => e.expiresAt > Date.now());
+	const allBodyLines = active.flatMap((e) => e.text.split("\n").map((line) => `│ ${line.trimEnd()}`));
 	const visible = allBodyLines.slice(-MAX_WIDGET_BODY_LINES);
 	return [`╭─ ${TRANSLATION_WIDGET_TITLE}`, ...visible, "╰─"];
 }

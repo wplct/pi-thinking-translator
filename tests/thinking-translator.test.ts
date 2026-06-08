@@ -125,18 +125,28 @@ test("getCompletedThinkingSections excludes trailing unfinished section", () => 
 });
 
 test("formatTranslationWidgetLines renders widget from history array", () => {
-	// 多段累积：只显示最后 MAX_WIDGET_BODY_LINES 行正文。
-	const short = ["第一段\n第二行"];
-	assert.deepEqual(__testing.formatTranslationWidgetLines(short), ["╭─ 思考翻译", "│ 第一段", "│ 第二行", "╰─"]);
+	// 多段累积：过滤过期条目，只显示最后 MAX_WIDGET_BODY_LINES 行正文。
+	const future = Date.now() + 60_000;
+	const mk = (text: string) => ({ text, expiresAt: future });
 
-	const long = ["行1", "行2", "行3", "行4", "行5", "行6", "行7", "行8", "行9", "行10", "行11"];
+	assert.deepEqual(__testing.formatTranslationWidgetLines([mk("第一段\n第二行")]), ["╭─ 思考翻译", "│ 第一段", "│ 第二行", "╰─"]);
+
+	const long = ["行1","行2","行3","行4","行5","行6","行7","行8","行9","行10","行11"].map(mk);
 	const result = __testing.formatTranslationWidgetLines(long);
-	// 标题 + 最后 8 行 + 底部边框 = 10 行
 	assert.equal(result.length, 10);
 	assert.equal(result[0], "╭─ 思考翻译");
 	assert.equal(result[1], "│ 行4");
 	assert.equal(result[8], "│ 行11");
 	assert.equal(result[9], "╰─");
+});
+
+test("formatTranslationWidgetLines filters expired entries", () => {
+	const past = Date.now() - 1000;
+	const future = Date.now() + 60_000;
+	const entries = [{ text: "过期文本", expiresAt: past }, { text: "有效文本", expiresAt: future }];
+	const result = __testing.formatTranslationWidgetLines(entries);
+	assert.equal(result.length, 3);
+	assert.equal(result[1], "│ 有效文本");
 });
 
 test("resolveTranslatorModel skips safely when registry or model is unavailable", () => {
