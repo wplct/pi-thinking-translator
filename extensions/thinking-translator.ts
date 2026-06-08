@@ -595,7 +595,13 @@ function scheduleExpiryCleanup(): void {
  * 移除所有已过期的翻译条目。
  */
 function purgeExpiredEntries(): void {
+	const before = translationEntries.length;
 	translationEntries = translationEntries.filter((e) => e.expiresAt > Date.now());
+	// 条目缩水时临时开 clearOnShrink 让 TUI 全量重绘、编辑器滚底
+	if (translationEntries.length < before) {
+		tuiRef?.setClearOnShrink?.(true);
+		setTimeout(() => tuiRef?.setClearOnShrink?.(false), 200);
+	}
 }
 
 /**
@@ -639,8 +645,10 @@ function clearTranslationWidget(ctx: NotifierContext): void {
 	translationEntries = [];
 	clearExpiryCleanupTimer();
 	widgetSetup = false;
+	tuiRef?.setClearOnShrink?.(true);
 	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, undefined, { placement: TRANSLATION_WIDGET_PLACEMENT });
 	ctx.ui?.setStatus?.(TRANSLATION_WIDGET_KEY, undefined);
+	setTimeout(() => tuiRef?.setClearOnShrink?.(false), 200);
 }
 
 /**
