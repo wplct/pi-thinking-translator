@@ -65,7 +65,7 @@ test("getAssistantMessageForTranslation keeps only finished assistant messages",
 });
 
 test("isThinkingTitleLine detects short title followed by blank line", () => {
-	// 行级启发式只负责识别“标题行 + 空行”边界，供流式时机判断使用。
+	// 行级启发式只负责识别"标题行 + 空行"边界，供流式时机判断使用。
 	const lines = ["Searching for plugins", "", "I should inspect the filesystem first."];
 	assert.equal(__testing.isThinkingTitleLine(lines, 0), true);
 	assert.equal(__testing.isThinkingTitleLine(["This line is intentionally much longer than forty characters and should not count", "", "Body"], 0), false);
@@ -120,16 +120,10 @@ test("formatTranslationWidgetLines wraps long CJK lines instead of truncating", 
 	// 中文超长行应自动换行，而非截断加省略号。
 	const width = 20;
 	const future = Date.now() + 60_000;
-	// 12 个中文字符 = 24 列 > width 20，应换行
 	const result = __testing.formatTranslationWidgetLines([{ text: "这是一段很长的中文翻译内容", expiresAt: future }], width);
-	// 无颜色前缀时标题为纯文本
-	assert.equal(result[0], "- 思考翻译 -");
-	assert.ok(result.length > 2, "长中文应该产生多行");
-	// 正文不包含旧格式的 │ 前缀
-	const bodyLines = result.slice(1);
-	bodyLines.forEach((line, i) => {
-		assert.ok(!line.startsWith("│"), `正文行${i}不应有 │ 前缀: ${line}`);
-	});
+	// 格式：标题 + 正文 + 底部分隔线
+	assert.ok(result[0]?.includes("思考翻译"), `标题应包含"思考翻译": ${result[0]}`);
+	assert.ok(result.length > 3, `长中文应有多行，实际 ${result.length}`);
 });
 
 test("formatTranslationWidgetLines wraps mixed CJK+ASCII correctly", () => {
@@ -137,8 +131,8 @@ test("formatTranslationWidgetLines wraps mixed CJK+ASCII correctly", () => {
 	const width = 30;
 	const future = Date.now() + 60_000;
 	const result = __testing.formatTranslationWidgetLines([{ text: "需要检查 plugin 配置文件是否正确加载", expiresAt: future }], width);
-	// 应换行
-	const bodyLines = result.slice(1);
+	// 标题 + 正文 + 底部
+	const bodyLines = result.slice(1, -1);
 	assert.ok(bodyLines.length >= 2, `应该至少有 2 行正文，实际 ${bodyLines.length}`);
 });
 
@@ -150,20 +144,24 @@ test("formatTranslationWidgetLines returns empty when no active entries", () => 
 });
 
 test("formatTranslationWidgetLines renders widget from history array", () => {
-	// 多段累积：过滤过期条目，只显示最后 MAX_WIDGET_BODY_LINES 行正文。
 	const width = 80;
 	const future = Date.now() + 60_000;
 	const mk = (text: string) => ({ text, expiresAt: future });
 
-	assert.deepEqual(__testing.formatTranslationWidgetLines([mk("第一段\n第二行")], width), ["- 思考翻译 -", "第一段", "第二行"]);
+	// 标题 + 2 行正文 + 底部分隔线 = 4 行
+	const result = __testing.formatTranslationWidgetLines([mk("第一段\n第二行")], width);
+	assert.equal(result.length, 4);
+	assert.ok(result[0]?.includes("思考翻译"));
+	assert.equal(result[1], "第一段");
+	assert.equal(result[2], "第二行");
 
-	// 超过 30 行正文时只保留最后 30 行
+	// 超过 30 行正文时只保留最后 30 行 + 标题 + 底部
 	const many = Array.from({ length: 40 }, (_, i) => mk(`行${i + 1}`));
-	const result = __testing.formatTranslationWidgetLines(many, width);
-	assert.equal(result.length, 31); // 标题 + 30 行正文
-	assert.equal(result[0], "- 思考翻译 -");
-	assert.equal(result[1], "行11");
-	assert.equal(result[30], "行40");
+	const resultMany = __testing.formatTranslationWidgetLines(many, width);
+	assert.equal(resultMany.length, 32); // 标题 + 30 行正文 + 底部
+	assert.ok(resultMany[0]?.includes("思考翻译"));
+	assert.equal(resultMany[1], "行11");
+	assert.equal(resultMany[30], "行40");
 });
 
 test("formatTranslationWidgetLines filters expired entries", () => {
@@ -172,7 +170,8 @@ test("formatTranslationWidgetLines filters expired entries", () => {
 	const future = Date.now() + 60_000;
 	const entries = [{ text: "过期文本", expiresAt: past }, { text: "有效文本", expiresAt: future }];
 	const result = __testing.formatTranslationWidgetLines(entries, width);
-	assert.equal(result.length, 2); // 标题 + 1 行正文
+	// 标题 + 1 行正文 + 底部 = 3
+	assert.equal(result.length, 3);
 	assert.equal(result[1], "有效文本");
 });
 

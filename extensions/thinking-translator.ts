@@ -649,24 +649,27 @@ function clearTranslationWidget(ctx: NotifierContext): void {
  */
 function getFadeColorFn(expiresAt: number): (s: string) => string {
 	if (!themeRef) return (s: string) => s;
-	const remaining = expiresAt - Date.now();
-	if (remaining > 25_000) return (s: string) => themeRef.fg("muted", s);
-	if (remaining > 2_000) return (s: string) => themeRef.fg("dim", s);
-	// 最后 2 秒极暗，近无色
+	const elapsed = Date.now() - (expiresAt - TRANSLATION_WIDGET_HIDE_DELAY_MS);
+	// 只在最后 5 秒渐隐：0~25s muted，25~28s dim，28~30s 极暗
+	if (elapsed < 25_000) return (s: string) => themeRef.fg("muted", s);
+	if (elapsed < 28_000) return (s: string) => themeRef.fg("dim", s);
 	return (s: string) => `\x1b[38;5;236m${s}\x1b[39m`;
 }
 
 /**
- * 从累积的历史译文生成固定框展示行；无边框，纯内容，
+ * 从累积的历史译文生成固定框展示行；上下分隔线，中间纯内容，
  * 按剩余时间渐隐文本色：muted(灰) → dim(暗灰) → 极暗(近黑)。
- * 标题用 accent 色，结尾用超时后自动移除。
- * 无有效条目时返回空数组（不展示 widget）。
+ * 标题和分隔线用 accent 色，无有效条目时返回空数组。
  */
 function formatTranslationWidgetLines(entries: TranslationEntry[], width: number): string[] {
 	const active = entries.filter((e) => e.expiresAt > Date.now());
 	if (active.length === 0) return [];
 
-	const title = themeRef?.fg("accent", truncateToWidth(`- ${TRANSLATION_WIDGET_TITLE} -`, width, "")) ?? `- ${TRANSLATION_WIDGET_TITLE} -`;
+	const sep = "─".repeat(Math.min(width, 60));
+	const titleLine = truncateToWidth(`── ${TRANSLATION_WIDGET_TITLE} ${sep}`, width, "");
+	const bottomLine = truncateToWidth(sep, width, "");
+	const coloredTitle = themeRef?.fg("accent", titleLine) ?? titleLine;
+	const coloredBottom = themeRef?.fg("accent", bottomLine) ?? bottomLine;
 
 	const allBodyLines = active.flatMap((e) => {
 		const colorFn = getFadeColorFn(e.expiresAt);
@@ -678,7 +681,7 @@ function formatTranslationWidgetLines(entries: TranslationEntry[], width: number
 	});
 
 	const visible = allBodyLines.slice(-MAX_WIDGET_BODY_LINES);
-	return [title, ...visible];
+	return [coloredTitle, ...visible, coloredBottom];
 }
 
 /**
