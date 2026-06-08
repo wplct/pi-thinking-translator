@@ -650,9 +650,9 @@ function clearTranslationWidget(ctx: NotifierContext): void {
 function getFadeColorFn(expiresAt: number): (s: string) => string {
 	if (!themeRef) return (s: string) => s;
 	const remaining = expiresAt - Date.now();
-	if (remaining > 15_000) return (s: string) => themeRef.fg("muted", s);
-	if (remaining > 3_000) return (s: string) => themeRef.fg("dim", s);
-	// 最后 3 秒极暗，近无色
+	if (remaining > 25_000) return (s: string) => themeRef.fg("muted", s);
+	if (remaining > 2_000) return (s: string) => themeRef.fg("dim", s);
+	// 最后 2 秒极暗，近无色
 	return (s: string) => `\x1b[38;5;236m${s}\x1b[39m`;
 }
 
