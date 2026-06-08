@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { stream } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 type AssistantMessage = { role: string; content?: Array<Record<string, unknown>> };
 type ModelRef = { provider: string; id: string };
@@ -64,6 +64,7 @@ let translationEntries: TranslationEntry[] = [];
 let pendingTranslationHideTimer: ReturnType<typeof setTimeout> | undefined;
 let expiryCleanupTimer: ReturnType<typeof setTimeout> | undefined;
 let tuiRef: any = undefined;
+let themeRef: any = undefined;
 let widgetSetup = false;
 
 /**
@@ -565,11 +566,12 @@ function finalizeWidget(ctx: NotifierContext, displayEpoch: number, displaySeque
  */
 function ensureWidget(ctx: NotifierContext): void {
 	if (widgetSetup) return;
-	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, ((tui: any, _theme: any) => {
+	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, ((tui: any, theme: any) => {
 		tuiRef = tui;
+		themeRef = theme;
 		return {
 			render: (width: number) => formatTranslationWidgetLines(translationEntries, width),
-			invalidate: () => {},
+			invalidate: () => { widgetSetup = false; },
 		};
 	}) as any, { placement: TRANSLATION_WIDGET_PLACEMENT });
 	widgetSetup = true;
@@ -642,27 +644,41 @@ function clearTranslationWidget(ctx: NotifierContext): void {
 }
 
 /**
- * 从累积的历史译文生成固定框展示行；超长行自动按终端列宽换行。
- * 标题和边框用 truncateToWidth 防止超出，正文用 wrapTextWithAnsi 自动折行，
- * 过滤已过期条目，只取最后 N 行正文。
+ * 根据条目剩余寿命返回渐隐颜色函数；新鲜用 muted，
+ * 即将过期用 dim，最后几秒用极暗灰色。
+ */
+function getFadeColorFn(expiresAt: number): (s: string) => string {
+	if (!themeRef) return (s: string) => s;
+	const remaining = expiresAt - Date.now();
+	if (remaining > 15_000) return (s: string) => themeRef.fg("muted", s);
+	if (remaining > 3_000) return (s: string) => themeRef.fg("dim", s);
+	// 最后 3 秒极暗，近无色
+	return (s: string) => `\x1b[38;5;236m${s}\x1b[39m`;
+}
+
+/**
+ * 从累积的历史译文生成固定框展示行；无边框，纯内容，
+ * 按剩余时间渐隐文本色：muted(灰) → dim(暗灰) → 极暗(近黑)。
+ * 标题用 accent 色，结尾用超时后自动移除。
+ * 无有效条目时返回空数组（不展示 widget）。
  */
 function formatTranslationWidgetLines(entries: TranslationEntry[], width: number): string[] {
 	const active = entries.filter((e) => e.expiresAt > Date.now());
-	// 正文区可用宽度：预留 "│ " 前缀的 2 列
-	const bodyWidth = Math.max(1, width - visibleWidth("│ "));
+	if (active.length === 0) return [];
+
+	const title = themeRef?.fg("accent", truncateToWidth(`- ${TRANSLATION_WIDGET_TITLE} -`, width, "")) ?? `- ${TRANSLATION_WIDGET_TITLE} -`;
+
 	const allBodyLines = active.flatMap((e) => {
+		const colorFn = getFadeColorFn(e.expiresAt);
 		const paragraphs = e.text.split("\n");
 		return paragraphs.flatMap((para) => {
-			const wrapped = wrapTextWithAnsi(para, bodyWidth);
-			return wrapped.map((line) => `│ ${line}`);
+			const wrapped = wrapTextWithAnsi(para, width);
+			return wrapped.map((line) => colorFn(line));
 		});
 	});
+
 	const visible = allBodyLines.slice(-MAX_WIDGET_BODY_LINES);
-	return [
-		truncateToWidth(`╭─ ${TRANSLATION_WIDGET_TITLE}`, width, "…"),
-		...visible,
-		truncateToWidth("╰─", width, ""),
-	];
+	return [title, ...visible];
 }
 
 /**
