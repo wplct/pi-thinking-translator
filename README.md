@@ -10,7 +10,7 @@ This package is a Pi extension for users who prefer to inspect visible assistant
 - Uses a model already configured in Pi's model registry.
 - Shows translations in a fixed widget above the editor instead of notifications, persistent session messages, or message-stream entries.
 - For `thinking`, splits content by paragraph using a `short title + blank line + body` heuristic, then translates the previous completed paragraph as soon as the next paragraph begins.
-- Keeps only the latest translated paragraph visible and clears the widget automatically 30 seconds after the last update.
+- Accumulates translations in a scrolling widget (last 8 lines visible); clears automatically 30 seconds after the last update.
 - Does not modify assistant messages, future model context, compaction input, or provider cache keys.
 - Supports optional translation of normal assistant `text` answers when explicitly enabled.
 - Supports global config with project-level overrides.
@@ -157,7 +157,7 @@ If translation is enabled but `translatorModel` is missing, cannot be found, or 
 2. For `thinking`, it detects paragraph starts using a `short title + blank line` heuristic and treats each `title + body` group as one translatable paragraph.
 3. When the next paragraph starts, it sends the previous completed paragraph to the configured Pi model with strict JSON-output instructions.
 4. It parses only `{ "translation": "..." }`; non-JSON or malformed outputs are rejected instead of displayed.
-5. It shows the cleaned translation in a fixed widget above the editor, replacing the previous translated paragraph.
+5. It appends the cleaned translation to a fixed scrolling widget above the editor.
 6. It clears the widget automatically 30 seconds after the last translated update.
 7. It does not call `sendMessage`, append a custom message, or return a modified assistant message, so translations are not written to the session file or future context.
 

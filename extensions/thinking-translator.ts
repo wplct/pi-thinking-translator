@@ -38,6 +38,7 @@ const TRANSLATION_WIDGET_KEY = "thinking-translator.translation";
 const TRANSLATION_WIDGET_TITLE = "思考翻译";
 const THINKING_TITLE_MAX_LENGTH = 40;
 const TRANSLATION_WIDGET_HIDE_DELAY_MS = 30_000;
+const MAX_WIDGET_BODY_LINES = 8;
 const TRANSLATION_WIDGET_PLACEMENT: WidgetPlacement = "aboveEditor";
 const GLOBAL_CONFIG_PATH = join(homedir(), ".pi", "agent", CONFIG_FILE_NAME);
 const DEFAULT_CONFIG: ResolvedTranslatorConfig = {
@@ -54,6 +55,7 @@ let translationDisplayEpoch = 0;
 let currentAssistantMessageSerial = 0;
 let latestTranslationDisplaySequence = 0;
 let translationRequestSequence = 0;
+let translationHistory: string[] = [];
 let pendingTranslationHideTimer: ReturnType<typeof setTimeout> | undefined;
 
 /**
@@ -464,14 +466,15 @@ async function translateAndShowBlock(
 }
 
 /**
- * 刷新固定翻译框；每次显示新译文都会重置 30 秒自动消失计时。
+ * 刷新固定翻译框；新译文追加到历史列表而不是替换，短段不会被立即挤出。
  */
 function showTranslationWidget(ctx: NotifierContext, translation: string, displayEpoch: number, displaySequence: number): void {
 	if (displayEpoch !== translationDisplayEpoch) return;
 	if (displaySequence < latestTranslationDisplaySequence) return;
 	latestTranslationDisplaySequence = displaySequence;
+	translationHistory.push(translation);
 	clearTranslationHideTimer();
-	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, formatTranslationWidgetLines(translation), { placement: TRANSLATION_WIDGET_PLACEMENT });
+	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, formatTranslationWidgetLines(translationHistory), { placement: TRANSLATION_WIDGET_PLACEMENT });
 	ctx.ui?.setStatus?.(TRANSLATION_WIDGET_KEY, undefined);
 	pendingTranslationHideTimer = setTimeout(() => {
 		if (displayEpoch !== translationDisplayEpoch) return;
@@ -498,6 +501,7 @@ function invalidateTranslationWidget(ctx: NotifierContext): void {
 	translationRequestSequence = 0;
 	thinkingStreamBlocks.clear();
 	clearTranslationHideTimer();
+	translationHistory = [];
 	clearTranslationWidget(ctx);
 }
 
@@ -505,16 +509,18 @@ function invalidateTranslationWidget(ctx: NotifierContext): void {
  * 清空固定翻译框和关联状态栏；避免旧译文残留到下一轮或下个会话。
  */
 function clearTranslationWidget(ctx: NotifierContext): void {
+	translationHistory = [];
 	ctx.ui?.setWidget?.(TRANSLATION_WIDGET_KEY, undefined, { placement: TRANSLATION_WIDGET_PLACEMENT });
 	ctx.ui?.setStatus?.(TRANSLATION_WIDGET_KEY, undefined);
 }
 
 /**
- * 生成固定框的展示行；只做最小包装，保留纯译文正文，不插入额外解释。
+ * 从累积的历史译文生成固定框展示行；只取最后 N 行正文，旧内容自动滚出视野。
  */
-function formatTranslationWidgetLines(translation: string): string[] {
-	const bodyLines = translation.split("\n").map((line) => `│ ${line.trimEnd()}`);
-	return [`╭─ ${TRANSLATION_WIDGET_TITLE}`, ...bodyLines, "╰─"];
+function formatTranslationWidgetLines(history: string[]): string[] {
+	const allBodyLines = history.flatMap((text) => text.split("\n").map((line) => `│ ${line.trimEnd()}`));
+	const visible = allBodyLines.slice(-MAX_WIDGET_BODY_LINES);
+	return [`╭─ ${TRANSLATION_WIDGET_TITLE}`, ...visible, "╰─"];
 }
 
 /**

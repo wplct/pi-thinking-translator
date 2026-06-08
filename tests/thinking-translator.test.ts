@@ -124,9 +124,19 @@ test("getCompletedThinkingSections excludes trailing unfinished section", () => 
 	]);
 });
 
-test("formatTranslationWidgetLines renders compact fixed widget", () => {
-	// 固定框只保留标题和译文正文，不再复用通知式文本包装。
-	assert.deepEqual(__testing.formatTranslationWidgetLines("第一段\n第二行"), ["╭─ 思考翻译", "│ 第一段", "│ 第二行", "╰─"]);
+test("formatTranslationWidgetLines renders widget from history array", () => {
+	// 多段累积：只显示最后 MAX_WIDGET_BODY_LINES 行正文。
+	const short = ["第一段\n第二行"];
+	assert.deepEqual(__testing.formatTranslationWidgetLines(short), ["╭─ 思考翻译", "│ 第一段", "│ 第二行", "╰─"]);
+
+	const long = ["行1", "行2", "行3", "行4", "行5", "行6", "行7", "行8", "行9", "行10", "行11"];
+	const result = __testing.formatTranslationWidgetLines(long);
+	// 标题 + 最后 8 行 + 底部边框 = 10 行
+	assert.equal(result.length, 10);
+	assert.equal(result[0], "╭─ 思考翻译");
+	assert.equal(result[1], "│ 行4");
+	assert.equal(result[8], "│ 行11");
+	assert.equal(result[9], "╰─");
 });
 
 test("resolveTranslatorModel skips safely when registry or model is unavailable", () => {
