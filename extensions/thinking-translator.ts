@@ -665,11 +665,9 @@ function formatTranslationWidgetLines(entries: TranslationEntry[], width: number
 	const active = entries.filter((e) => e.expiresAt > Date.now());
 	if (active.length === 0) return [];
 
-	const sep = "─".repeat(Math.min(width, 60));
+	const sep = "─".repeat(width);
 	const titleLine = truncateToWidth(`── ${TRANSLATION_WIDGET_TITLE} ${sep}`, width, "");
-	const bottomLine = truncateToWidth(sep, width, "");
 	const coloredTitle = themeRef?.fg("accent", titleLine) ?? titleLine;
-	const coloredBottom = themeRef?.fg("accent", bottomLine) ?? bottomLine;
 
 	const allBodyLines = active.flatMap((e) => {
 		const colorFn = getFadeColorFn(e.expiresAt);
@@ -681,7 +679,7 @@ function formatTranslationWidgetLines(entries: TranslationEntry[], width: number
 	});
 
 	const visible = allBodyLines.slice(-MAX_WIDGET_BODY_LINES);
-	return [coloredTitle, ...visible, coloredBottom];
+	return [coloredTitle, ...visible];
 }
 
 /**
